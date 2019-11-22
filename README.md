@@ -6,6 +6,7 @@ TASK CONFIGURATION
 Name: ConferenceFolder-FolderID-VideoName #omit .mp4 
       e.g. "ParkCity2019-170211-ch1_video_03" 
 Labels: tool ~radio=type:__undefined__,grasper,cottonoid,muscle,suction,drill
+        frame ~radio=type:start,stop
 Bug Tracker:
 Dataset Repository: https://github.com/guillaumekugener/surgical-training-project.git
 Source: Local 
