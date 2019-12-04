@@ -1,6 +1,6 @@
 # surgical-training-project
 
-Time: 1 minute chunks (Break them down into chunks we can do in 30 min or 1 hour)
+The videos are broken down in chunks of 1000 frames per chunk.
 
 ## TASK CONFIGURATION
 
