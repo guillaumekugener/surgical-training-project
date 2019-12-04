@@ -6,7 +6,7 @@ The videos are broken down in chunks of 1000 frames per chunk.
 
 The fields below should be copied into CVAT when creating a new task.
 ```
-Name: ConferenceFolder-FolderID-VideoName #omit .mp4 (e.g. "ParkCity2019-170211-ch1_video_03-frames_NNNNNNN_NNNNNNNN") 
+Name: ConferenceFolder-FolderID-VideoName #omit .mp4 (e.g. "ParkCity2019-170211-ch1_video_01_frames_00022001_frame_00023000") 
 Labels: tool ~radio=type:__undefined__,grasper,cottonoid,muscle,suction,drill,string
         frame ~radio=type:start,stop
 Bug Tracker:
