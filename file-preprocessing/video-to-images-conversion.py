@@ -12,25 +12,26 @@ import re
 
 ## SETUP
 video_file_name = sys.argv[1]
-output_directory = sys.argv[2]
+output_directory = re.sub('/$', '', sys.argv[2]) + '/'
 batch_size = int(sys.argv[3])
 
-print(video_file_name)
-print(output_directory)
+print('The video being converted to frames is: ' + video_file_name)
+print('The output directory will be: ' + output_directory) + '/'
+print('Batch size is: ' + str(batch_size))
 
 # The line below can be used to determine the total number of frames in a video
 # ffmpeg -i <file_name> -map 0:v:0 -c copy -f null -
 
 ## Run ffmpeg to generate the images
 make_output_directory = subprocess.Popen(' '.join(['mkdir', output_directory]), shell=True, stdout=subprocess.PIPE)
-conversion_process = subprocess.Popen(' '.join(['ffmpeg', '-i', video_file_name, '-q:v 1', output_directory + '/frame_%08d.jpeg']), shell=True, stdout=subprocess.PIPE)
+conversion_process = subprocess.Popen(' '.join(['ffmpeg', '-i', video_file_name, '-q:v 1', output_directory + 'frame_%08d.jpeg']), shell=True, stdout=subprocess.PIPE)
 conversion_process.communicate()
 
 # Now zip all files in order to upload to drive (in batches of 1000?)
 # In the conversion process command, we are prepending 0s until there are 8 digits in the frame
 # number. So when we are running the zip command, we will leverage this fact to determine which 
 # which files to combine together
-all_frame_files = glob.glob(output_directory + '/frame_*.jpeg')
+all_frame_files = glob.glob(output_directory + 'frame_*.jpeg')
 print('Total frames: ' + str(len(all_frame_files)))
 
 # Zip frames into bins
@@ -46,7 +47,7 @@ for i in xrange(intervals):
 	print(all_frame_files[start])
 	print(all_frame_files[end])
 
-	zip_folder_name = output_directory + '/' + re.sub('.*/', '', re.sub('\\.mp4$', '', video_file_name, flags=re.IGNORECASE)) + '_frames_' + str(start+1) + '_' + str(end+1)
+	zip_folder_name = output_directory + re.sub('.*/', '', re.sub('\\.mp4$', '', video_file_name, flags=re.IGNORECASE)) + '_frame_' + re.sub('(.*/frame_)|(\\.jpeg)', '', all_frame_files[start]) + '_' + re.sub('(.*/)|(\\.jpeg)', '', all_frame_files[end])
 	mkzip_dir = subprocess.Popen(' '.join(['mkdir', zip_folder_name]), shell=True, stdout=subprocess.PIPE)
 	
 	# Wait for the make directory function to be complete before moving folders into it
