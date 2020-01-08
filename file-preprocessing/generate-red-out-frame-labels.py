@@ -1,6 +1,9 @@
 '''
 This script generates a tsv mapping frame to a binary classification of whether or not the
 endoscope is "redded-out" in that frame.
+
+IDEAS: take the average across 9 boxes and then take the average of that
+
 '''
 
 import sys
@@ -13,6 +16,8 @@ import shutil
 import csv
 import re
 import time
+import pickle
+import pandas as pd
 
 from os.path import isfile, join
 
@@ -21,14 +26,22 @@ from os.path import isfile, join
 # contains all of the frames for a single video in zip files
 source_dir = sys.argv[1]
 tsv_output_name = sys.argv[2]
+model_file_name = sys.argv[3]
+model_header_file_name = sys.argv[4]
 
 print('Generating redding out output for ' + source_dir)
 
+# The model we are using to call red out
+loaded_model = pickle.load(open(model_file_name, 'rb'))
 
-# The threshold we are using for now is 5 (for channel 2). 
-channel_2_threshold = 5
-channel_2_range_threshold = 5
-
+# Given that the order of headers might change over time, we run these next lines
+# so that the model prediction uses the right order of the x values for the predictions
+# TODO: could probably be avoided if we use pandas dataframes...
+header_order = pd.read_csv(model_header_file_name, header=None)
+model_header_order_iterate = [i for i in header_order[0]]
+model_header_order_index = {}
+for i in range(len(model_header_order_iterate)):
+    model_header_order_index[model_header_order_iterate[i]] = i
 
 # Get all of the zip files with the images for this video
 zip_of_images = [join(source_dir, f) for f in os.listdir(source_dir) if isfile(join(source_dir, f)) and re.search('zip$', f)]
@@ -40,75 +53,108 @@ frame_values = []
 average_channel_values = []
 t1 = time.time()
 
+dimension_of_squares = 3
+
+# We have to open one image to get the dimensions for all of them
+v1z=zipfile.ZipFile(zip_of_images[0])
+image_1 = imageio.imread(v1z.open(v1z.namelist()[0]))
+dimensions_of_images = image_1.shape
+
+dimension_of_squares = 3
+x_dim, y_dim = dimensions_of_images[0]/dimension_of_squares, dimensions_of_images[1]/dimension_of_squares
+
+cuts_to_make = []
+for k in range(dimensions_of_images[2]):
+    for i in range(dimension_of_squares):
+        for j in range(dimension_of_squares):
+            cuts_to_make.append((
+                (int(x_dim * i), int(min(x_dim * (i + 1), dimensions_of_images[0]))),
+                (int(y_dim * j), int(min(y_dim * (j + 1), dimensions_of_images[1]))),
+                k
+            ))
+
+
+# We want to split the image into squares and then calculate the mean of the 
+# pixel values for each square
+t1 = time.time()
+boxed_values = []
+# This part takes a while...
+all_frames = None
+
+frame_values = []
+average_channel_values = []
 # Iterate through all the zip files 
 for zi in range(len(zip_of_images[:])):
-	z = zip_of_images[zi]
+    z = zip_of_images[zi]
 
-	print('Processing zip ' + str(zi+1) + '/' + str(len(zip_of_images)) + '...')
+    print('Processing zip ' + str(zi+1) + '/' + str(len(zip_of_images)) + '...')
 
-	video_zip=zipfile.ZipFile(z)
-	all_frames = video_zip.namelist()
+    video_zip=zipfile.ZipFile(z)
+    all_frames = video_zip.namelist()
 
-	# For each frame in this zip, take the mean value for each channel
-	for f in all_frames[:]:
-		img = imageio.imread(video_zip.open(f))
-		average_channel_values.append(np.mean(np.mean(img, axis=1), axis=0)) # Take the mean value of the pixels
+    # For each frame in this zip, take the mean value for each channel
+    for f in all_frames[:]:
+        img = imageio.imread(video_zip.open(f))
+        # average_channel_values.append(np.mean(np.mean(img, axis=1), axis=0)) # Take the mean value of the pixels
+        # average_channel_values.append(np.mean(img[:,:,1])) # We are using channel 2, so only taking the mean here cuts the run time in half
+        boxed_values_tmp = []
+        for rr in cuts_to_make:
+            boxed_values_tmp.append(np.mean(img[rr[0][0]:rr[0][1],rr[1][0]:rr[1][1],rr[2]]))
+        boxed_values.append(boxed_values_tmp)
+        
+    print('Finished process: ' + str(time.time() - t1))
 
-	print('Finished process: ' + str(time.time() - t1))
+# Generate the header
+output_file_header = ['frame']
+# for r in range(len(average_channel_values[0])):
+#     output_file_header.append('channel_' + str(r))
 
-# Convert the channel values to arrays for manipulation later on
-channel_1 = [i[0] for i in average_channel_values]
-channel_2 = [i[1] for i in average_channel_values]
-channel_3 = [i[2] for i in average_channel_values]
+for c in cuts_to_make:
+    output_file_header.append('range_x' + str(c[0][0]) + '-' + str(c[0][1]) + 'y' + str(c[1][0]) + '-' + str(c[1][1]) + 'z' + str(c[2]))
+
+output_file_header.append('red_out_prob')
+
+# Create an index array for the headers
+header_dict = {}
+for i in range(len(output_file_header)):
+    header_dict[output_file_header[i]] = i
 
 # Get the names of the frames for mapping later on
 frame_names = []
 for zi in range(len(zip_of_images[:])):
-	z = zip_of_images[zi]
-	video_zip=zipfile.ZipFile(z)
+    z = zip_of_images[zi]
+    video_zip=zipfile.ZipFile(z)
 
-	frame_names = frame_names + video_zip.namelist()
-
-# Identify the frames that pass the threshold for channel 2
-bleeding_channel_2 = [i for i in range(len(channel_2)) if channel_2[i] < channel_2_threshold]
-
-# Using the crude criteria above, we will have false positives (we may also have false negatives)
-# but at this time I have not looked into false negatives as much. One way to limit the false
-# positives is to require that redding out has a duration of at least n frames. In the snippet
-# below, we apply this filtering: we first get the range of frames that are redded out and then
-# only keep the cases where the length of the range is above some threshold value.
-ranges_of_bleeding = []
-current_range = [-1, -1]
-for j in bleeding_channel_2[:]:
-	if current_range[0] == -1:
-	    current_range = [j, j]
-	elif (current_range[1] + 1) == j:
-	    current_range[1] = j
-	else:
-	    ranges_of_bleeding.append((current_range[0], current_range[1]))
-	    current_range = [j, j]
-
-threshold_of_range = 5
-redded_out_frames_prune = []
-for rb in ranges_of_bleeding:
-	if (rb[1] - rb[0] > channel_2_range_threshold):
-	    redded_out_frames_prune = redded_out_frames_prune + list(range(rb[0], rb[1]+1))
-
-# Convert the indicies to frame names and save the tsv
-redded_out_frames = [frame_names[i] for i in redded_out_frames_prune]
-
-print(str(len(redded_out_frames)) + ' frames passed redding out criteria')
+    frame_names = frame_names + video_zip.namelist()
 
 # Write the output to a file
 with open(join(source_dir, tsv_output_name), 'wt') as out_file:
-	tsv_writer = csv.writer(out_file, delimiter='\t')
-	tsv_writer.writerow(['frame', 'redded_out'])
+    tsv_writer = csv.writer(out_file, delimiter='\t')
+    tsv_writer.writerow(output_file_header)
 
-	for fn in frame_names:
-		if fn in redded_out_frames:
-			tsv_writer.writerow([fn, 1])
-		else:
-			tsv_writer.writerow([fn, 0])
+    for i in range(len(frame_names)):
+        fn = frame_names[i]
+        row_info = [fn]
+        
+        # for j in range(len(average_channel_values[i])):
+        #     row_info.append(average_channel_values[i][j])
+        
+        # This is the row info that the model needs    
+        m_r_i = [None] * len(model_header_order_iterate)
+        for j in range(len(boxed_values[i])):
+            # The column that we are currently adding
+            col_adding = output_file_header[len(row_info)]
+            
+            row_info.append(boxed_values[i][j])   
+
+            # If out model uses this column, then we want to add it to the m_r_i
+            # array for the prediction
+            if col_adding in model_header_order_index:         
+                m_r_i[model_header_order_index[col_adding]] = row_info[header_dict[col_adding]]
+
+        # Predict the value and add to row_info
+        row_info.append(loaded_model.predict_proba(np.array([m_r_i]))[0,1])
+        tsv_writer.writerow(row_info)
 
 
 
