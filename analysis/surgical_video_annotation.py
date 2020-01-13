@@ -77,6 +77,37 @@ class SurgicalVideoFrame:
                     tool_positions.append((t.get_type(), 'BR'))
         
         return tool_positions
+    
+    def plot(self, path_to_zip, exatract_to_path):
+        full_image_location = os.path.join(path_to_zip, self.name)
+        
+        # Unzip the file containing the frames
+        zf = zipfile.ZipFile(path_to_zip, 'r')
+        
+        zf.extract(self.name, path=exatract_to_path) # It's in current directory
+        zf.close()
+        
+        # Plot the image of the frame
+        print(os.path.join(exatract_to_path, self.name))
+        im = np.array(Image.open(os.path.join(exatract_to_path, self.name)), dtype=np.uint8)
+
+        # Create figure and axes
+        fig,ax = plt.subplots(1)
+
+        ax.imshow(im)
+        
+        # Plot boxes for each of the tools
+        for t in self.tools:
+            plotting_values = t.get_plotting_values()
+            
+            rect = patches.Rectangle(
+                plotting_values['lc'], 
+                plotting_values['w'],
+                plotting_values['h'],
+                linewidth=1,edgecolor='r',facecolor='none')
+            ax.add_patch(rect)
+
+        plt.show()
             
             
 '''
@@ -112,6 +143,14 @@ class SurgicalToolBoxed:
     # of the box for the suction (which would be close to where suction is actually happening)
     def get_position(self):
         return self.get_center()
+    
+    # Get the top left corner and height + width for plotting
+    def get_plotting_values(self):
+        left_corner = self.coordinates[0]
+        w = self.coordinates[1][0] - self.coordinates[0][0]
+        h = self.coordinates[1][1] - self.coordinates[0][1]
+        
+        return { 'lc': left_corner, 'w': w, 'h': h }
     
     # Get the area of the box
     def get_box_area(self):
