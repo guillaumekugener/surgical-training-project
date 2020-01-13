@@ -17,7 +17,7 @@ class SurgicalVideoAnnotation:
     def __init__(self, file_path):
         self.file_path = file_path
         
-        # Because we are dealing with zips as download, we need to unzip and then get the path name
+        # Because we are dealing with zips as download, we need to unzip, parse the xml, and then delete the file we extracted
         zf = zipfile.ZipFile(file_path, 'r')
         dump_file_path = zf.namelist().pop()
         zf.extractall() # It's in current directory
@@ -29,13 +29,25 @@ class SurgicalVideoAnnotation:
         
         self.__build_object()
         
-        # Now remove the created dump file
+        # Now remove the created dump file from above
         os.remove(dump_file_path)
 
     def __build_object(self):        
         # Generate frame objects for each annotated frame
         for frame in self.xml.iter('image'):
             self.frames.append(SurgicalVideoFrame(frame))
+    
+    # Returns a binary list whether a tool is present in each frame.
+    # The list is in tuples: (frame_name, 0 or 1)
+    def tool_presence(self, tool_name):
+        res = []
+        
+        for f in self.frames:
+            if tool_name in f.get_tools_in_frame():
+                res.append((f.name, 1))
+            else:
+                res.append((f.name, 0))
+        return res
 
 '''
 SurgicalVideoFrame
@@ -56,6 +68,13 @@ class SurgicalVideoFrame:
         
         for bt in self.xml.iter('box'):
             self.tools.append(SurgicalToolBoxed(bt))
+    
+    # Return tools in this frame
+    def get_tools_in_frame(self):
+        tif = {}
+        for t in self.tools:
+            tif[t.get_type()] = True
+        return tif
     
     # Get the quadrant location of each tool in the image
     def get_tool_quadrants(self):
