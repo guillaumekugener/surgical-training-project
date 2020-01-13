@@ -1,6 +1,13 @@
 import xml.etree.ElementTree as ET
 import zipfile
 import os
+
+import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+from PIL import Image
+
+import numpy as np
 '''
 SurgicalVideoAnnotation
 
