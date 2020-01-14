@@ -1,12 +1,12 @@
 # surgical-training-project
 
-Time: 1 minute chunks (Break them down into chunks we can do in 30 min or 1 hour)
+The videos are broken down in chunks of 1000 frames per chunk.
 
 ## TASK CONFIGURATION
 
 The fields below should be copied into CVAT when creating a new task.
 ```
-Name: ConferenceFolder-FolderID-VideoName #omit .mp4 (e.g. "ParkCity2019-170211-ch1_video_03") 
+Name: ConferenceFolder-FolderID-VideoName #omit .mp4 (e.g. "ParkCity2019-170211-ch1_video_01_frame_00022001_frame_00023000") 
 Labels: tool ~radio=type:__undefined__,grasper,cottonoid,muscle,suction,drill,string
         frame ~radio=type:start,stop
 Bug Tracker:
