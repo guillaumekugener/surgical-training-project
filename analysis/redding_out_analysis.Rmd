@@ -6,7 +6,7 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = FALSE)
 ```
 
 ```{r}
@@ -17,7 +17,6 @@ library(pROC)
 
 We are interested in automating the labelling of endoscopic red out (when the visual field is almost completely covered by blood). RJP and GGK independently annotated ranges of red out in 10,000 frames of video. 
 
-
 TODO: look at the concordance between graders when frames are at least 5 seconds, 10 seconds, 
 
 Think about a red out threshold predictor
@@ -25,14 +24,8 @@ Think about a red out threshold predictor
 ```{r}
 redding_out <- read_tsv('~/Documents/USC/USC_docs/ml/surgical-training-project/file-preprocessing/output-test/redout-test.tsv') %>%
   mutate(index=rank(frame))
-```
 
-```{r}
-ggplot(redding_out, aes(index, channel_2, color=redded_out)) + 
-  geom_point(size=0.5) +
-  # scale_color_manual(c('blue', 'red')) +
-  xlim(7200, 7555) + 
-  theme_bw()
+nrow(redding_out)
 ```
 
 ```{r}
@@ -52,6 +45,8 @@ redding_out_overall <- ggplot(red_outs_combined) +
   xlab('Frame') + ylab('Annotator') +
   theme_bw()
 ```
+
+The plot below is a visual representation of where two graders marked red out frames.
 
 ```{r}
 redding_out_overall
@@ -86,6 +81,7 @@ overlapping_white_out <- intersect(
   setdiff(seq(1,10000), red_frames_ggk_all)
 )
 
+length(overlapping_white_out)
 ```
 
 
@@ -118,22 +114,25 @@ g
 ```
 
 ```{r}
-colnames(generated_metrics_testing)
-
 # head(generated_metrics_testing)
 red_out_logit <- glm(GGK ~ ., 
   data = generated_metrics_testing %>%
+    top_n(7000, index) %>%
     dplyr::select(-frame, -channel_0, -channel_1, -channel_2, -index, -RJP, -pred), family = "binomial")
 
-summary(red_out_logit)
+new_preds <- generated_metrics_testing %>%
+  filter(index %in% seq(7001, 10000)) %>%
+  mutate(pred=predict(red_out_logit, newdata = .))
 
-generated_metrics_testing$pred <- predict(red_out_logit, newdata = generated_metrics_testing)
-
-g <- roc(GGK ~ pred, data = generated_metrics_testing)
+g <- roc(GGK ~ pred, data = new_preds)
 # generated_metrics_testing %>%
 #   filter(GGK == 1)
 
 g
+```
+
+```{r}
+# Save the model that we will use for the predictions for the automation scrcipt
 ```
 
 
