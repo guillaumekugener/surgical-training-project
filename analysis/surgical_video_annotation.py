@@ -1,6 +1,7 @@
 import xml.etree.ElementTree as ET
 import zipfile
 import os
+from math import floor, ceil
 
 import matplotlib.pyplot as plt
 import matplotlib.pyplot as plt
@@ -97,18 +98,18 @@ class SurgicalVideoFrame:
         
         return tool_positions
     
-    def plot(self, path_to_zip, exatract_to_path):
+    def plot(self, path_to_zip, extract_to_path):
         full_image_location = os.path.join(path_to_zip, self.name)
         
         # Unzip the file containing the frames
         zf = zipfile.ZipFile(path_to_zip, 'r')
         
-        zf.extract(self.name, path=exatract_to_path) # It's in current directory
+        zf.extract(self.name, path=extract_to_path) # It's in current directory
         zf.close()
         
         # Plot the image of the frame
-        print(os.path.join(exatract_to_path, self.name))
-        im = np.array(Image.open(os.path.join(exatract_to_path, self.name)), dtype=np.uint8)
+        print(os.path.join(extract_to_path, self.name))
+        im = np.array(Image.open(os.path.join(extract_to_path, self.name)), dtype=np.uint8)
 
         # Create figure and axes
         fig,ax = plt.subplots(1)
@@ -127,8 +128,36 @@ class SurgicalVideoFrame:
             ax.add_patch(rect)
 
         plt.show()
+        
+    # For each tool in the frame, create and save an image of the tool (we would later use this for tool ID)
+    # to generate a dataset
+    def extract_tools_as_images(self, path_to_zip, extract_to_path, image_save_path):
+        full_image_location = os.path.join(path_to_zip, self.name)
+        
+        # Unzip the file containing the frames
+        zf = zipfile.ZipFile(path_to_zip, 'r')
+        
+        zf.extract(self.name, path=extract_to_path) # It's in current directory
+        zf.close()
+        
+        # Plot the image of the frame
+        im = np.array(Image.open(os.path.join(extract_to_path, self.name)), dtype=np.uint8)
+        
+        # Now extract individual tool images
+        for t in self.tools:
+            plotting_values = t.get_plotting_values() 
+
             
+            tool_im = im[
+                max(0, floor(t.coordinates[0][1])):min(im.shape[0], ceil(t.coordinates[1][1])),
+                max(0, floor(t.coordinates[0][0])):min(im.shape[1], ceil(t.coordinates[1][0])),
+                :
+            ]
             
+            im_new = Image.fromarray(tool_im)
+            im_new.save(os.path.join(image_save_path, self.name + '_' + t.get_type() + '.jpeg'),  "JPEG")
+            
+        
 '''
 SurgicalToolBoxed
 
