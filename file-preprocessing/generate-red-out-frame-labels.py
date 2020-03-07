@@ -19,17 +19,27 @@ import time
 import pickle
 import pandas as pd
 
+from math import floor, ceil
 from os.path import isfile, join
 
 ### SETUP 
 # Here, we want to have the path to the directory that 
 # contains all of the frames for a single video in zip files
-source_dir = sys.argv[1]
+zip_of_images = sys.argv[1]
 tsv_output_name = sys.argv[2]
 model_file_name = sys.argv[3]
 model_header_file_name = sys.argv[4]
 
-print('Generating redding out output for ' + source_dir)
+# TODO: clean this up because this will be annoying later.
+# Give specific time stamps that we want to assess. We convert to frames and then only care about those frames
+# This is in order to save a ton of time on the annotating (by only annotating frames of interest)
+# start_time_seconds = int(sys.argv[5])
+# end_time_seconds = int(sys.argv[6])
+# batch_size = int(sys.argv[7])
+# frame_rate = 30
+
+
+print('Generating redding out output for ' + zip_of_images)
 
 # The model we are using to call red out
 loaded_model = pickle.load(open(model_file_name, 'rb'))
@@ -43,9 +53,6 @@ model_header_order_index = {}
 for i in range(len(model_header_order_iterate)):
     model_header_order_index[model_header_order_iterate[i]] = i
 
-# Get all of the zip files with the images for this video
-zip_of_images = [join(source_dir, f) for f in os.listdir(source_dir) if isfile(join(source_dir, f)) and re.search('zip$', f)]
-
 # This part takes a while...
 all_frames = None
 
@@ -56,8 +63,9 @@ t1 = time.time()
 dimension_of_squares = 3
 
 # We have to open one image to get the dimensions for all of them
-v1z=zipfile.ZipFile(zip_of_images[0])
-image_1 = imageio.imread(v1z.open(v1z.namelist()[0]))
+v1z=zipfile.ZipFile(zip_of_images)
+print(v1z.namelist()[1])
+image_1 = imageio.imread(v1z.open(v1z.namelist()[1]))
 dimensions_of_images = image_1.shape
 
 dimension_of_squares = 3
@@ -83,26 +91,35 @@ all_frames = None
 
 frame_values = []
 average_channel_values = []
+
+# relevant_sf = floor(start_time_seconds * frame_rate / batch_size)
+# relevant_ef = ceil(end_time_seconds * frame_rate / batch_size)
+
+# print(relevant_sf)
+# print(relevant_ef)
 # Iterate through all the zip files 
-for zi in range(len(zip_of_images[:])):
-    z = zip_of_images[zi]
 
-    print('Processing zip ' + str(zi+1) + '/' + str(len(zip_of_images)) + '...')
+# # Skip ranges of fluff
+# if zi not in range(relevant_sf, relevant_ef):
+#     continue
 
-    video_zip=zipfile.ZipFile(z)
-    all_frames = video_zip.namelist()
+video_zip=zipfile.ZipFile(zip_of_images)
+all_frames = video_zip.namelist()
 
-    # For each frame in this zip, take the mean value for each channel
-    for f in all_frames[:]:
-        img = imageio.imread(video_zip.open(f))
-        # average_channel_values.append(np.mean(np.mean(img, axis=1), axis=0)) # Take the mean value of the pixels
-        # average_channel_values.append(np.mean(img[:,:,1])) # We are using channel 2, so only taking the mean here cuts the run time in half
-        boxed_values_tmp = []
-        for rr in cuts_to_make:
-            boxed_values_tmp.append(np.mean(img[rr[0][0]:rr[0][1],rr[1][0]:rr[1][1],rr[2]]))
-        boxed_values.append(boxed_values_tmp)
-        
-    print('Finished process: ' + str(time.time() - t1))
+# For each frame in this zip, take the mean value for each channel
+for f in all_frames[:]:
+    if not re.search('jpeg$', f):
+        print('Skipping non-image file')
+        continue
+    img = imageio.imread(video_zip.open(f))
+    # average_channel_values.append(np.mean(np.mean(img, axis=1), axis=0)) # Take the mean value of the pixels
+    # average_channel_values.append(np.mean(img[:,:,1])) # We are using channel 2, so only taking the mean here cuts the run time in half
+    boxed_values_tmp = []
+    for rr in cuts_to_make:
+        boxed_values_tmp.append(np.mean(img[rr[0][0]:rr[0][1],rr[1][0]:rr[1][1],rr[2]]))
+    boxed_values.append(boxed_values_tmp)
+    
+print('Finished process: ' + str(time.time() - t1))
 
 # Generate the header
 output_file_header = ['frame']
@@ -121,14 +138,12 @@ for i in range(len(output_file_header)):
 
 # Get the names of the frames for mapping later on
 frame_names = []
-for zi in range(len(zip_of_images[:])):
-    z = zip_of_images[zi]
-    video_zip=zipfile.ZipFile(z)
-
-    frame_names = frame_names + video_zip.namelist()
+video_zip=zipfile.ZipFile(zip_of_images)
+frame_names = frame_names + video_zip.namelist()
+frame_names = [f for f in frame_names if re.search('jpeg$', f)]
 
 # Write the output to a file
-with open(join(source_dir, tsv_output_name), 'wt') as out_file:
+with open(join(tsv_output_name), 'wt') as out_file:
     tsv_writer = csv.writer(out_file, delimiter='\t')
     tsv_writer.writerow(output_file_header)
 
