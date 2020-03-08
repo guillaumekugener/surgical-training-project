@@ -1,0 +1,321 @@
+---
+title: "Grant Analysis"
+author: "Guillaume Kugener"
+date: "2/23/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, include=TRUE)
+library(tidyverse)
+library(ggrepel)
+library(magrittr)
+library(reshape2)
+library(ggpubr)
+library(ggsci)
+```
+
+```{r include=FALSE}
+plot_dir <- '~/Documents/USC/USC_docs/ml/surgical-training-project/data/grant_application/'
+tool_time_stamp_data <- read_tsv('~/Downloads/tool_time_stamps - Sheet1.tsv')
+
+tool_order_plot <- c('no tool in view', 'drill', 'suction', 'grasper', 'cottonoid', 'muscle')
+```
+
+
+```{r}
+file_to_use <- '~/Documents/USC/USC_docs/ml/surgical-training-project/data/UPDATED_Raw Data.xlsx - Sheet1.tsv'
+
+outcomes_raw_data <- read_tsv(file_to_use) %>% 
+  filter(!is.na(SurveyID)) %>%
+  mutate(Group=case_when(
+    (!is.na(Attyears) & Attyears) >= 1 ~ 'Attending',
+    (!is.na(Resyears) & Resyears) >= 1 ~ 'Resident',
+    TRUE ~ 'None'
+  )) %>%
+  # For now, filter out those that are not attendings or residents, but will want to come back to this later
+  filter(Group != 'None')
+
+# We should remove the people who did three trials for now, as they were not trained between trial 1 and 2 but trained between trials 2 and 3, so we will need to think about how to compare them to everyone else
+outcomes_raw_data %<>% filter(is.na(`Trial 3 Start Time (hhmmss)`))
+```
+
+
+```{r}
+plotting_data_tools_proportions <- tool_time_stamp_data %>%
+  mutate(
+    SurveyID = stringr::str_extract(string=stringr::str_extract(pattern='S[0-9]+', string=`Video ID`), pattern='[0-9]+'),
+    Trial = stringr::str_extract(string=`Video ID`, pattern='[0-9]+$'),
+    interval_length = `End frame` - `Start frame`
+  ) %>%
+  group_by(SurveyID, Trial) %>%
+  mutate(video_start = min(`Start frame`), video_end = max(`End frame`)) %>%
+  group_by(SurveyID, Trial, Tool) %>%
+  dplyr::summarise(total_frames=sum(interval_length), proportion=sum(interval_length)/(video_end[1]-video_start[1]))
+```
+
+```{r}
+# Get the total frames that have no tools
+frames_with_no_tools <- c()
+for (vid in unique(tool_time_stamp_data$`Video ID`)) {
+  relevant_data <- tool_time_stamp_data %>% filter(vid==`Video ID`)
+  vstart = min(relevant_data$`Start frame`)
+  vend = max(relevant_data$`End frame`)
+  
+  all_frames <- vstart:vend
+  frames_with_tools <- c()
+  for (ri in 1:nrow(relevant_data)) {
+    frames_with_tools <- c(frames_with_tools, relevant_data$`Start frame`[ri]:relevant_data$`End frame`[ri])
+  }
+  
+  frames_with_no_tools[[vid]] <- setdiff(all_frames, frames_with_tools) %>% length(.)/length(all_frames)
+}
+
+plotting_data_tools_proportions %<>% as.data.frame() %>% 
+  rbind(
+  data.frame(
+    `VideoID`=names(frames_with_no_tools), 
+    proportion=frames_with_no_tools,
+    Tool='no tool in view',
+    stringsAsFactors = F) %>%
+    dplyr::rename(`Video ID`=VideoID) %>%
+    mutate(
+      SurveyID = stringr::str_extract(string=stringr::str_extract(pattern='S[0-9]+', string=`Video ID`), pattern='[0-9]+'),
+      Trial = stringr::str_extract(string=`Video ID`, pattern='[0-9]+$'),
+      total_frames=NA
+    ) %>% dplyr::select(colnames(plotting_data_tools_proportions))
+)
+```
+
+```{r}
+pvalues_data <- plotting_data_tools_proportions %>%
+  mutate(Trial=paste0('T', Trial)) %>%
+  dcast(SurveyID + Tool ~ Trial, value.var='proportion') %>%
+  group_by(Tool) %>%
+  filter(Tool != 'drill') %>%
+  dplyr::summarise(p.value=t.test(x=`T1`, y=`T2`)$p.value) %>%
+  mutate(text=ifelse(p.value < 0.05, '*', ''))
+```
+
+```{r}
+plotting_data_tools_proportions %<>% mutate(Tool=factor(Tool, levels=tool_order_plot))
+
+tool_proportion_use <- ggplot(plotting_data_tools_proportions, aes(Tool, proportion, color=Trial)) +
+  geom_point(position = position_jitterdodge(jitter.width = 0.2)) +
+  geom_boxplot(alpha=0.5, outlier.shape = NA) +
+  geom_text(data=pvalues_data, aes(Tool, 1.05, label=text), color='black', size=6) +
+  xlab('') +
+  ylab('Proportion of trial spent in frame') +
+  theme_bw() +
+  theme(
+    legend.position = 'bottom',
+    legend.justification = 'left'
+  )
+
+ggsave(tool_proportion_use, filename = file.path(plot_dir, 'proportional_tool_use_t1_v_t2.pdf'), width = 10, height = 5, device='pdf')
+```
+
+```{r}
+tool_overtime_by_trial_data <- tool_time_stamp_data %>%
+  mutate(
+    SurveyID = stringr::str_extract(string=stringr::str_extract(pattern='S[0-9]+', string=`Video ID`), pattern='[0-9]+'),
+    Trial = stringr::str_extract(string=`Video ID`, pattern='[0-9]+$'),
+    interval_length = `End frame` - `Start frame`
+  ) %>%
+  group_by(SurveyID, Trial) %>%
+  mutate(video_start = min(`Start frame`), video_end = max(`End frame`)) %>%
+  mutate(
+    start_fraction=(`Start frame`-video_start)/(video_end-video_start),
+    end_fraction=(`End frame`-video_start)/(video_end-video_start)
+  )
+```
+
+```{r}
+tool_overtime_by_trial_data %<>% 
+  # filter(SurveyID %in% c(303, 304, 305, 306)) %>%
+  mutate(Tool=factor(Tool, tool_order_plot))
+
+tool_overtime_plot <- ggplot(tool_overtime_by_trial_data %>%
+                               ungroup() %>%
+                               mutate(
+                                 SurveyID=paste0('ID: ', SurveyID),
+                                 Trial=paste0('Trial ', Trial)
+                                )) +
+  geom_rect(aes(xmin=start_fraction, xmax=end_fraction, ymin=as.integer(Tool)-0.5, ymax=as.integer(Tool)+0.5, fill=Tool)) +
+  xlab('Time stamp (as fraction of total trial time)') +
+  scale_y_continuous(breaks=c(1:length(tool_order_plot)), labels=tool_order_plot) +
+  scale_fill_jama() +
+  facet_wrap(SurveyID~Trial, ncol = 2) +
+  theme_bw() +
+  theme(
+    legend.position = 'top',
+    legend.justification = 'left'
+    # axis.text.y = element_blank(),
+    # axis.ticks.y = element_blank()
+  )
+
+
+ggsave(tool_overtime_plot, filename = file.path(plot_dir, 'trial_1_v_trial_2_tool_appearence.pdf'), width = 10, height = 20, device = 'pdf')
+```
+
+```{r}
+# Outcomes for these trials vs. proportion of each tool use
+proportions_vs_outcomes_data <- plotting_data_tools_proportions %>%
+  left_join(.,
+    outcomes_raw_data %>% 
+      filter(SurveyID %in% plotting_data_tools_proportions$SurveyID) %>%
+      dplyr::select(SurveyID, `Trial 1 TTH`, `Trial 2 TTH`, `trial 1 ebl`, `trial 2  ebl`) %>%
+      gather(var, value, -SurveyID) %>%
+      mutate(
+        Trial=(stringr::str_extract(pattern='[0-9]+', string=var)),
+        type=stringr::str_extract(pattern='TTH|ebl', string=var)
+      ) %>%
+      reshape2::dcast(SurveyID + Trial ~ type, value.var='value'),
+  by = c('SurveyID', 'Trial')
+) %>% mutate(Tool=factor(Tool, levels=c('drill', 'suction', 'grasper', 'cottonoid', 'muscle', 'no tool in view')))
+
+tth_v_proportion <- ggplot(proportions_vs_outcomes_data, aes(proportion, TTH, color=Trial)) +
+  geom_point() +
+  # scale_color_jama() +
+  facet_wrap(~Tool) +
+  theme_bw() +
+  theme(
+    legend.position = 'top',
+    legend.justification = 'left'
+    # axis.text.y = element_blank(),
+    # axis.ticks.y = element_blank()
+  )
+
+ebl_v_proportion <- ggplot(proportions_vs_outcomes_data, aes(proportion, ebl, color=Trial)) +
+  geom_point() +
+  # scale_color_jama() +
+  facet_wrap(~Tool) +
+  theme_bw() +
+  theme(
+    legend.position = 'top',
+    legend.justification = 'left'
+    # axis.text.y = element_blank(),
+    # axis.ticks.y = element_blank()
+  )
+
+ggsave(tth_v_proportion, filename = file.path(plot_dir, 'tth_v_proportion.pdf'), width = 7, height = 5, device='pdf')
+ggsave(ebl_v_proportion, filename = file.path(plot_dir, 'ebl_v_proportion.pdf'), width = 7, height = 5, device='pdf')
+```
+
+```{r}
+percent_improvement_outcomes <- outcomes_raw_data %>% 
+  filter(SurveyID %in% plotting_data_tools_proportions$SurveyID) %>%
+  dplyr::select(SurveyID, `Trial 1 TTH`, `Trial 2 TTH`, `trial 1 ebl`, `trial 2  ebl`) %>%
+  gather(var, value, -SurveyID) %>%
+  mutate(
+    Trial=paste0('T', (stringr::str_extract(pattern='[0-9]+', string=var))),
+    type=stringr::str_extract(pattern='TTH|ebl', string=var)
+  ) %>%
+  reshape2::dcast(SurveyID + type ~ Trial, value.var='value') %>%
+  mutate(improvement=T1/T2) %>%
+  reshape2::dcast(SurveyID ~ type, value.var='improvement')
+
+proportions_as_improvement <- plotting_data_tools_proportions %>%
+  mutate(Trial=paste0('T', Trial)) %>%
+  reshape2::dcast(SurveyID + Tool ~ Trial, value.var = 'proportion') %>%
+  mutate(tool_use_improvement=T2/T1) %>%
+  dplyr::select(SurveyID, Tool, tool_use_improvement) %>%
+  left_join(., percent_improvement_outcomes, by='SurveyID')
+
+ggplot(proportions_as_improvement, aes(ebl, tool_use_improvement, color=Tool)) +
+  geom_point() +
+  facet_wrap(~Tool)
+
+# improvement (trial 2/1)
+proportions_vs_outcomes_data %>%
+  mutate(Trial=paste0('T', Trial)) %>%
+  gather(var, value, -SurveyID, -Trial, -Tool, -total_frames) %>%
+  reshape2::dcast(SurveyID + Tool + var ~ Trial, value.var='value')
+```
+
+```{r}
+tool_presence_frames <- read_csv('~/Documents/USC/USC_docs/ml/surgical-training-project/data/grant_application/interface-mockup/S306T2.csv')
+
+red_out_probs <- read_tsv('~/Documents/USC/USC_docs/ml/surgical-training-project/data/dev/frames/metric-redout-S306T2.tsv') %>%
+  mutate(index=rank(frame)) %>%
+  mutate(loss=ifelse(red_out_prob > 0.5, 1, 0)) %>%
+  mutate(prop=cumsum(red_out_prob))
+
+
+prob_hemostatis <- tool_presence_frames %>%
+  mutate(index=rank(frame)) %>%
+  mutate(prob = (cumsum(cottonoid)/2 + cumsum(grasper) + cumsum(muscle) + cumsum(suction)/2)/(index*3))
+
+prob_hemostatis_plot <- ggplot(prob_hemostatis %>% filter(index <= 2536), aes(index, prob)) +
+  geom_area(fill='black', alpha=0.5) +
+  geom_line(color='black') +
+  xlab('Frame') +
+  ylab('Probability achieve hemostasis in next 20 sec') +
+  scale_y_continuous(limits=c(0, 1)) +
+  theme_bw() +
+  theme(
+    legend.position = 'none',
+    axis.text = element_text(size=16),
+    axis.title = element_text(size=16),
+    strip.text = element_text(size=16)
+  )
+
+ggsave(prob_hemostatis_plot, filename = '~/Documents/USC/USC_docs/ml/surgical-training-project/data/grant_application/interface-mockup/thh_prob.png', width = 5, height = 5, device='png')
+```
+
+```{r}
+estimated_blood_loss_plot <- ggplot(red_out_probs %>% filter(index <= 2536), aes(index, prop)) +
+  geom_area(fill='red', alpha=0.5) +
+  geom_line(color='red') +
+  xlab('Frame') +
+  ylab('Estimated blood loss (mL)') +
+  geom_hline(yintercept = 100, linetype=2) +
+  annotate('text', x = 0, y = 102, size = 6, label='Goal', hjust=0, vjust=0) +
+  scale_y_continuous(limits=c(0, 120)) +
+  theme_bw() +
+  theme(
+    legend.position = 'none',
+    axis.text = element_text(size=16),
+    axis.title = element_text(size=16),
+    strip.text = element_text(size=16)
+  )
+
+ggsave(estimated_blood_loss_plot, filename = '~/Documents/USC/USC_docs/ml/surgical-training-project/data/grant_application/interface-mockup/ebl.png', width = 5, height = 5, device='png')
+
+tool_presence_pre <- tool_presence_frames %>%
+  gather(tool, present, -frame) %>%
+  group_by(tool) %>%
+  mutate(index=rank(frame)) %>%
+  mutate(prop=cumsum(present)/index) %>%
+  left_join(., 
+    red_out_probs %>% 
+      mutate(frame=gsub('\\.jpeg', '', gsub('.*/', '', frame))) %>% 
+      dplyr::select(frame, red_out_prob), 
+    by=c('frame')) %>%
+  ungroup() %>% 
+  mutate(tool=factor(tool, levels=c('drill', 'suction', 'cottonoid', 'string', 'grasper', 'muscle')))
+
+stats_on_current_surgery <- ggplot(tool_presence_pre %>% filter(index <= 2536), aes(index, prop, fill=tool, color=tool)) +
+  geom_area(alpha=0.5) +
+  geom_line() +
+  facet_wrap(~tool, nrow=1) +
+  scale_y_continuous(limits = c(0, 1)) +
+  scale_fill_jama() +
+  scale_color_jama() +
+  xlab('Frame') +
+  ylab('Proportion of time tool has been present') +
+  theme_bw() +
+  theme(
+    legend.position = 'none',
+    axis.text = element_text(size=16),
+    axis.title = element_text(size=16),
+    strip.text = element_text(size=16)
+  )
+
+ggsave(stats_on_current_surgery, filename = '~/Documents/USC/USC_docs/ml/surgical-training-project/data/grant_application/interface-mockup/tool_stats.png', width = 30, height = 5, device='png')
+```
+
+
+
+
+
