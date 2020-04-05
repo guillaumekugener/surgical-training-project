@@ -2,6 +2,8 @@ import xml.etree.ElementTree as ET
 import zipfile
 import os
 from math import floor, ceil
+import copy
+import re
 
 import matplotlib.pyplot as plt
 import matplotlib.pyplot as plt
@@ -26,18 +28,71 @@ class SurgicalVideoAnnotation:
         
         tree = ET.parse(dump_file_path)
         self.xml = tree.getroot()
-        self.frames = []
+        self.total_frames = self.__get_total_frames()
+        self.frames = [None] * self.total_frames
         
         self.__build_object()
         
         # Now remove the created dump file from above
         os.remove(dump_file_path)
 
+    def __get_total_frames(self):
+        for child in self.xml:
+            if child.tag == 'meta':
+                for cc in child:
+                    if cc.tag == 'task':
+                        for ccc in cc:
+                            if ccc.tag == 'size':
+                                return(int(ccc.text))
+
     def __build_object(self):        
         # Generate frame objects for each annotated frame
+        # We need to add empty frames. We will do this by taking the first annotated frame and setting its
+        # tools attribute to an empty list
+        empty_frame = None
+        frames_with_tools_id = {}
+        
+        # We want to have the id of the first frame and the index of the frame
+        # Since not all videos start with any tools in view, it might not always be the first frame
+        # in our annotations
+        first_frame_index = -1
+        frame_string_id_length = -1
         for frame in self.xml.iter('image'):
-            self.frames.append(SurgicalVideoFrame(frame))
-    
+            if empty_frame is None:
+                # Make the empty frame
+                empty_frame = SurgicalVideoFrame(frame)
+                empty_frame.tools = []
+                empty_frame.xml = None
+            
+            current_frame = SurgicalVideoFrame(frame)
+            frames_with_tools_id[current_frame.get_id()] = current_frame
+            
+            # When we add all the frames, we want the naming and ids to be properly indexed
+            if first_frame_index == -1:
+                p = re.compile("[0-9]+")
+                # Set the name of the first frame
+                first_frame_name = p.search(current_frame.name).group(0)
+                frame_string_id_length = len(first_frame_name)
+                first_frame_index = int(first_frame_name) - current_frame.get_id()
+
+        # Now that we have all of the frames that have tools in them, it is time to add all of the frames
+        # to our list of frames in our object
+        for fi in range(len(self.frames)):
+            if fi in frames_with_tools_id:
+                self.frames[fi] = frames_with_tools_id[fi]
+            # Add an empty frame
+            else:
+                new_empty_frame = copy.deepcopy(empty_frame)
+                new_empty_frame.id = fi
+                
+                frame_id_name = str(fi + first_frame_index)
+                while len(frame_id_name) < frame_string_id_length:
+                    frame_id_name = '0' + frame_id_name
+                
+                new_empty_frame.name = 'frame_' + frame_id_name + '.jpeg'
+                
+                self.frames[fi] = new_empty_frame
+                
     # Returns a binary list whether a tool is present in each frame.
     # The list is in tuples: (frame_name, 0 or 1)
     def tool_presence(self, tool_name):
@@ -49,7 +104,7 @@ class SurgicalVideoAnnotation:
             else:
                 res.append((f.name, 0))
         return res
-
+    
 '''
 SurgicalVideoFrame
 
@@ -58,6 +113,7 @@ This class represents a single frame of a video annotation of a surgical video
 class SurgicalVideoFrame:
     def __init__(self, frame):
         self.name = frame.attrib['name']
+        self.id = int(frame.attrib['id'])
         self.xml = frame
         self.height = float(frame.attrib['height'])
         self.width = float(frame.attrib['width'])
@@ -69,6 +125,9 @@ class SurgicalVideoFrame:
         
         for bt in self.xml.iter('box'):
             self.tools.append(SurgicalToolBoxed(bt))
+    
+    def get_id(self):
+        return self.id
     
     # Return tools in this frame
     def get_tools_in_frame(self):
@@ -98,18 +157,19 @@ class SurgicalVideoFrame:
         
         return tool_positions
     
-    def plot(self, path_to_zip, extract_to_path):
+    # additional_sub_file: in the case where there are subdirectories within the zip file of the frames
+    def plot(self, path_to_zip, extract_to_path, additional_sub_file=''):
         full_image_location = os.path.join(path_to_zip, self.name)
         
         # Unzip the file containing the frames
         zf = zipfile.ZipFile(path_to_zip, 'r')
         
-        zf.extract(self.name, path=extract_to_path) # It's in current directory
+        zf.extract(os.path.join(additional_sub_file, self.name), path=extract_to_path) # It's in current directory
         zf.close()
         
         # Plot the image of the frame
         print(os.path.join(extract_to_path, self.name))
-        im = np.array(Image.open(os.path.join(extract_to_path, self.name)), dtype=np.uint8)
+        im = np.array(Image.open(os.path.join(extract_to_path, additional_sub_file, self.name)), dtype=np.uint8)
 
         # Create figure and axes
         fig,ax = plt.subplots(1)
