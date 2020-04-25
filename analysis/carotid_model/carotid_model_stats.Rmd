@@ -1,0 +1,1723 @@
+---
+title: "Figures ICAI Sim"
+author: "Guillaume Kugener"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, include=FALSE)
+
+## Loads libraries and the datasets that we need to create the figures
+## I am slowly moving figures to their own files so that in the future it is easier to parse this file
+source('~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/carotid_model/preprocess_data.R')
+```
+
+<!-- ## Summary of participants -->
+
+```{r}
+total_surgeons <- dim(complete_data)[1]
+total_ns <- dim(complete_data %>% filter(Specialty== 'Neurosurgery'))[1]
+total_ent <- dim(complete_data %>% filter(Specialty=='Otolaryngology'))[1]
+total_other <- dim(complete_data %>% filter(Specialty!='Otolaryngology', Specialty!='Neurosurgery'))[1]
+
+performed_two_trials <- dim(raw_data)[1]
+attending_two_trials <- dim(raw_data %>% filter(Group=='Attending'))[1]
+trainee_two_trials <- dim(raw_data %>% filter(Group=='Trainee'))[1]
+
+performed_three_trials <- dim(complete_data %>% filter(!is.na(`Trial 3 Start Time (hhmmss)`)))[1]
+```
+
+
+```{r}
+survey_responses_data <- raw_data %>%
+  filter(!is.na(carotidconfidencepre)) %>% 
+  dplyr::select(
+    SurveyID, Group, 
+    carotidconfidencepre, carotidconfidencepost, 
+    generalconfidencepre, generalconfidencepost,
+    `Trial 1 TTH`, `Trial 2 TTH`,
+    `trial 1 ebl`, `trial 2 ebl`
+  )
+
+survey_responses_data %>%
+  gather(s, v, -SurveyID, -Group) %>%
+  filter(!is.na(v)) %>%
+  group_by(Group, s) %>%
+  dplyr::summarise(m=mean(v,na.rm = T))
+
+survey_contig_table <- survey_responses_data %>%
+  gather(s,v,-SurveyID, -Group) %>%
+  filter(!is.na(v)) %>%
+  group_by(Group, s, v) %>%
+  dplyr::summarise(count=n()) %>%
+  dcast(Group + v ~ s, value.var='count')
+
+survey_contig_table[is.na(survey_contig_table)] <- 0
+
+survey_contig_table %>%
+  filter(Group=='Attending') %>%
+  dplyr::select(v, carotidconfidencepre, carotidconfidencepost) %>%
+  column_to_rownames(var='v') %>%
+  fisher.test()
+
+survey_contig_table %>%
+  filter(Group=='Trainee') %>%
+  dplyr::select(v, carotidconfidencepre, carotidconfidencepost) %>%
+  column_to_rownames(var='v') %>%
+  fisher.test()
+
+survey_responses_data %<>%
+  filter(!is.na(carotidconfidencepre), !is.na(carotidconfidencepost), !is.na(generalconfidencepre), !is.na(generalconfidencepost)) %>%
+  mutate(
+    carotidconfidencepre=factor(carotidconfidencepre),
+    carotidconfidencepost=factor(carotidconfidencepost),
+    generalconfidencepre=factor(generalconfidencepre),
+    generalconfidencepost=factor(generalconfidencepost)
+  )
+
+# Association between confidence and TTH
+# aov(`Trial 1 TTH` ~ carotidconfidencepre, data = survey_responses_data) %>% summary()
+# aov(`Trial 1 TTH` ~ carotidconfidencepost, data = survey_responses_data) %>% summary()
+# aov(`Trial 1 TTH` ~ generalconfidencepre, data = survey_responses_data) %>% summary()
+# aov(`Trial 1 TTH` ~ generalconfidencepost, data = survey_responses_data) %>% summary()
+# 
+# aov(`Trial 2 TTH` ~ carotidconfidencepre, data = survey_responses_data) %>% summary()
+# aov(`Trial 2 TTH` ~ carotidconfidencepost, data = survey_responses_data) %>% summary()
+# aov(`Trial 2 TTH` ~ generalconfidencepre, data = survey_responses_data) %>% summary()
+# aov(`Trial 2 TTH` ~ generalconfidencepost, data = survey_responses_data) %>% summary()
+```
+
+Below, we look at the correlation between TTH and confidence scores. If a p = 0, that means that p < 0.001 (due to rounding).
+
+```{r include=TRUE}
+for (con in c("carotidconfidencepre", "carotidconfidencepost", "generalconfidencepre", "generalconfidencepost")) {
+  print('')
+  print(paste0('-----', con ,' associations with outcomes -----'))
+  for (tt in c('Trial 1 TTH', 'Trial 2 TTH', 'trial 1 ebl', 'trial 2 ebl')) {
+    corrs_res <- cor.test(as.numeric(survey_responses_data[,con]), as.numeric(survey_responses_data[,tt]))
+    print(paste0('Pearson correlation with ', tt, ': R=', round(corrs_res$estimate, 3), ', p=', round(corrs_res$p.value, 3)))
+
+    for (sg in c('Attending', 'Trainee')) {
+      res_sg <- survey_responses_data %>% filter(Group==sg)
+      cor_res_sg <- cor.test(as.numeric(res_sg[,con]), as.numeric(res_sg[,tt]))
+      
+      print(paste0('Pearson correlation with ', tt, ' in ' , sg, ': R=', round(cor_res_sg$estimate, 3), ', p=', round(cor_res_sg$p.value, 3)))
+    }
+  }
+}
+
+#ggplot(survey_responses_data, aes(carotidconfidencepost, `Trial 2 TTH`, fill=carotidconfidencepost)) +
+ # geom_boxplot()
+```
+
+<!-- ## Compare sites -->
+
+
+<!-- ## Trial success -->
+
+```{r}
+# Success rate general
+preprocess_for_success_rate <- raw_data %>% 
+  dplyr::select(SurveyID, Group, `Trial 1` = `Trial 1 Success`, `Trial 2`=`Trial 2 Success`) %>%
+  gather(trial, s, -SurveyID, -Group) %>%
+  filter(!is.na(s))
+
+success_rate_overall <- preprocess_for_success_rate %>%
+  group_by(trial) %>%
+  dplyr::summarise( 
+    rate=length(which(s==1))/n()
+  )
+
+# Contigency table creation
+fisher_success_overall <- preprocess_for_success_rate %>%
+  group_by(trial, s) %>%
+  dplyr::summarise(count=n()) %>%
+  mutate(v=ifelse(s==0, 'fail', 'success')) %>%
+  dcast(trial ~ v, value.var='count') %>%
+  column_to_rownames('trial') %>%
+  fisher.test()
+```
+
+```{r}
+# Success rate split by group (residents vs. attendings)
+success_rate_by_group <- preprocess_for_success_rate %>%
+  group_by(Group, trial) %>%
+  dplyr::summarise( 
+    rate=length(which(s==1))/n()
+  )
+
+prep_fisher_success_by_group <- preprocess_for_success_rate %>%
+  group_by(Group, trial, s) %>%
+  dplyr::summarise(count=n()) %>%
+  mutate(v=ifelse(s==0, 'fail', 'success')) %>%
+  dcast(Group + trial ~ v, value.var='count')
+
+fisher_attendings_success_rate <- prep_fisher_success_by_group %>%
+  filter(Group=='Attending') %>%
+  dplyr::select(-Group) %>%
+  column_to_rownames('trial') %>%
+  fisher.test()
+
+fisher_residents_success_rate <- prep_fisher_success_by_group %>%
+  filter(Group=='Trainee') %>%
+  dplyr::select(-Group) %>%
+  column_to_rownames('trial') %>%
+  fisher.test()
+```
+
+```{r}
+overall_success_rate <- ggplot(success_rate_overall, aes(trial, rate)) +
+  geom_bar(stat = 'identity', color='black', fill='grey', alpha = 0.5) +
+  annotate('text', x = 2, y = 1.05, label=ifelse(fisher_success_overall$p.value < 0.05, '*', ''), size=12/ggplot2:::.pt) +
+  # scale_fill_jama() +
+  # facet_wrap(~Group) +
+  xlab('Trial Number') +
+  ylab('Trial success rate') +
+  scale_y_continuous(limits = c(0, 1.10), expand = c(0,0)) +
+  theme_bw() +
+  theme(
+    text = element_text(size = 12),
+    axis.text = element_text(size=12),
+    # axis.title = element_text(size=12),
+    axis.title.x = element_blank(),
+    panel.grid.major.x = element_blank(),
+    legend.position = 'none',
+    strip.text = element_text(size = 12)
+  )
+```
+
+```{r}
+by_group_success_rate <- ggplot(success_rate_by_group, aes(Group, rate, fill=trial)) +
+  geom_bar(stat = 'identity', color='black', position = position_dodge()) +
+  scale_fill_brewer() +
+  guides(fill=guide_legend(title = '', title.position = 'bottom')) +
+  annotate('text', x = 1.25, y =1.05, label=ifelse(fisher_attendings_success_rate$p.value < 0.05, '*', ''), size=12/ggplot2:::.pt) +
+  annotate('text', x = 2.25, y = 1.05, label=ifelse(fisher_residents_success_rate$p.value < 0.05, '*', ''), size=12/ggplot2:::.pt) +
+  # facet_wrap(~Group) +
+  xlab('Trial Number') +
+  ylab('Trial success rate') +
+  # facet_wrap(~Group) +
+  scale_y_continuous(limits = c(0, 1.10), expand = c(0,0)) +
+  theme_bw() +
+  theme(
+    text = element_text(size = 12),
+    axis.text = element_text(size=12),
+    # axis.title = element_text(size=12),
+    axis.title.x = element_blank(),
+    panel.grid.major.x = element_blank(),
+    legend.position = c(0.01,0.99),
+    legend.justification = c(0,1),
+    legend.background = element_rect(fill='transparent'),
+    legend.text = element_text(size=12),
+    strip.text = element_text(size = 12)
+  )
+```
+
+<!-- ## Time to hemostasis -->
+
+<!-- A look at the time to hemostasis  -->
+
+```{r include=FALSE}
+tth_columns <- raw_data %>% colnames() %>% .[grep('TTH', .)] %>% setdiff(., c('Trial 1 TTH_1', 'Trial 2 TTH_1'))
+tth_data <- raw_data %>%
+  dplyr::select(SurveyID, Group, tth_columns) %>%
+  gather(var, value, -SurveyID, -Group) %>%
+  mutate(trial = gsub(' TTH', '', var)) %>%
+  mutate(trial=factor(trial, c('Trial 1', 'Trial 2', 'Trial 3')))
+
+# To look for those that have complete data
+counts_by_individual <- tth_data %>%
+  group_by(SurveyID) %>%
+  dplyr::summarise(count=length(which(!is.na(value)))) %>%
+  arrange(-count)
+
+tth_data %>%
+  group_by(trial, Group) %>%
+  dplyr::summarise(m=mean(value, na.rm = T))
+```
+
+```{r}
+tth_bar_plot_data <- tth_data %>% 
+  filter(trial != 'Trial 3') %>% 
+  mutate(Group='All') %>%
+  group_by(trial) %>%
+  dplyr::summarise(m=mean(value, na.rm = T), s=sd(value, na.rm = T)/sqrt(length(value[!is.na(value)])))
+```
+
+```{r}
+tth_overall_plot <- ggpubr::ggbarplot(
+  data = tth_data %>%
+    filter(trial != 'Trial 3', !is.na(value)) %>%
+    mutate(Group='All'),
+  add = c("mean_se"),
+  x = 'trial', y = 'value', fill = 'trial'
+) +
+stat_compare_means(label = "p.format", method = "t.test",
+ref.group = "Trial 1", label.y = 300, paired = T) +
+  scale_fill_jama() +
+  # facet_wrap(~Group) +
+  xlab('Trial Number') +
+  ylab('Time to Hemostasis') +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 320)) +
+  theme_bw() +
+  theme(
+    text = element_text(size = 12),
+    axis.text = element_text(size=12),
+    # axis.title = element_text(size=12),
+    axis.title.x = element_blank(),
+    panel.grid.major.x = element_blank(),
+    legend.position = 'none',
+    strip.text = element_text(size = 12)
+  )
+
+tth_overall_plot <- ggplot(tth_bar_plot_data, aes(trial, m)) +
+  geom_bar(stat='identity', color='black', fill='grey', alpha = 0.5) +
+  geom_errorbar(aes(ymin=m-s, ymax=m+s), width=0.2) +
+  annotate(x = 2, y = 300,geom = 'text', label = '*', size = 12/ggplot2::.pt) +
+  # geom_point(position = position_jitter(width = 0.25)) +
+  scale_fill_jama() +
+  # facet_wrap(~Group) +
+  xlab('Trial Number') +
+  ylab('Time to Hemostasis') +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 310)) +
+  theme_bw() +
+  theme(
+    text = element_text(size = 12),
+    axis.text = element_text(size=12),
+    # axis.title = element_text(size=12),
+    axis.title.x = element_blank(),
+    panel.grid.major.x = element_blank(),
+    legend.position = 'none',
+    strip.text = element_text(size = 12)
+  )
+```
+
+```{r}
+pre_tth_bar_plot_data_group <- tth_data %>% 
+  filter(trial != 'Trial 3')
+
+tth_bar_plot_data_group <- pre_tth_bar_plot_data_group %>% 
+  group_by(trial, Group) %>%
+  dplyr::summarise(m=mean(value, na.rm = T), s=sd(value, na.rm = T)/sqrt(length(value[!is.na(value)])))
+
+# Prep signficance data
+sig_text_tth_bar_plot_data_group <- pre_tth_bar_plot_data_group %>%
+  dcast(SurveyID + Group ~ trial, value.var='value') %>%
+  group_by(Group) %>%
+  dplyr::summarise(
+    p=t.test(`Trial 1`, `Trial 2`)$p.value
+  ) %>%
+  mutate(
+    label=ifelse(p < 0.05, '*', 'ns'),
+    x = ifelse(Group=='Attending', 1.225, 2.225),
+    trial='Trial 2',
+    m = 300
+  )
+
+
+tth_split_by_training <- ggplot(tth_bar_plot_data_group, aes(Group, m, fill=trial)) +
+  geom_bar(stat='identity', color='black', position = position_dodge()) +
+  geom_errorbar(aes(ymin=m-s, ymax=m+s), width=0.2, position = position_dodge(width = 0.9)) +
+  geom_text(data=sig_text_tth_bar_plot_data_group, aes(x, m, label=label), size=12/ggplot2:::.pt) +
+  guides(fill=guide_legend(title='', title.position = 'bottom')) +
+  # annotate(x = 2, y = 280,geom = 'text', label = '*', size = 12) +
+  # geom_point(position = position_jitter(width = 0.25)) +
+  scale_fill_brewer() +
+  xlab('Trial Number') +
+  ylab('Time to Hemostasis') +
+  # facet_wrap(~Group) +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 310)) +
+  theme_bw() +
+  theme(
+    text = element_text(size = 12),
+    axis.text = element_text(size=12),
+    # axis.title = element_text(size=12),
+    axis.title.x = element_blank(),
+    panel.grid.major.x = element_blank(),
+    legend.position = 'none',
+    # legend.position = c(0.01, 0.99),
+    # legend.justification = c(0,1),
+    # legend.background = element_rect(fill='transparent'),
+    # legend.text = element_text(size=12),
+    strip.text = element_text(size = 12)
+  )
+
+tth_split_by_training
+```
+
+```{r eval=FALSE}
+ggpaired(tth_data %>% filter(!is.na(value)), x='var', y='value', line.color = 'grey', line.size = 0.4) +
+  facet_wrap(~Group)
+```
+
+
+```{r}
+tth_data_m_median <- tth_data %>%
+  # filter(Group == 'Attending') %>%
+  filter(!is.na(value), trial %in% c('Trial 1', 'Trial 2')) %>%
+  group_by(trial) %>%
+  dplyr::summarise(m = mean(value), med=median(value))
+
+tth_data_t_test <- tth_data %>%
+  # filter(Group == 'Attending') %>%
+  filter(!is.na(value), trial %in% c('Trial 1', 'Trial 2')) %>%
+  dcast(SurveyID + Group ~ var, value.var = 'value') %$%
+  t.test(x = `Trial 1 TTH`, y = `Trial 2 TTH`, paired = T)
+
+tth_data_t_test_by_group <- tth_data %>%
+  # filter(Group == 'Attending') %>%
+  filter(!is.na(value), trial %in% c('Trial 1', 'Trial 2')) %>%
+  dcast(SurveyID + Group ~ var, value.var = 'value') %>%
+  group_by(Group) %>%
+  dplyr::summarise(
+    m_t1 = mean(`Trial 1 TTH`),
+    m_t2 = mean(`Trial 2 TTH`),
+    p = t.test(x = `Trial 1 TTH`, y = `Trial 2 TTH`, paired = T)$p.value,
+    ci_low = t.test(x = `Trial 1 TTH`, y = `Trial 2 TTH`, paired = T)$conf.int[1],
+    ci_high = t.test(x = `Trial 1 TTH`, y = `Trial 2 TTH`, paired = T)$conf.int[2]
+  )
+```
+
+<!-- ## Estimated blood loss -->
+
+<!-- A look at the estimated blood loss -->
+
+```{r include=FALSE}
+ebl_columns <- raw_data %>% colnames() %>% .[grep('ebl', .)]
+ebl_data <- raw_data %>%
+  dplyr::select(SurveyID, Group, ebl_columns) %>%
+  magrittr::set_colnames(gsub('  ', ' ', colnames(.))) %>%
+  gather(var, value, -SurveyID, -Group) %>%
+  mutate(trial = gsub(' ebl', '', var)) %>%
+  mutate(trial=factor(gsub('^t', 'T', trial), c('Trial 1', 'Trial 2', 'Trial 3')))
+
+# To look for those that have complete data
+ebl_counts_by_individual <- ebl_data %>%
+  group_by(SurveyID) %>%
+  dplyr::summarise(count=length(which(!is.na(value)))) %>%
+  arrange(-count)
+```
+
+```{r}
+# Remove the one case that is not paired
+ebl_all_paired <- ebl_data %>% 
+  filter(trial != 'Trial 3', !is.na(value)) %>%
+  group_by(SurveyID) %>%
+  dplyr::summarise(count=n()) %>% 
+  filter(count == 2) %$% SurveyID
+```
+
+```{r}
+overall_ebl_data <- ebl_data %>% 
+  filter(trial != 'Trial 3', SurveyID %in% ebl_all_paired) %>%
+  group_by(trial) %>%
+  dplyr::summarise(m=mean(value, na.rm=T), s = sd(value, na.rm = T)/sqrt(length(value[!is.na(value)])))
+
+overall_ebl <- ggplot(overall_ebl_data, aes(trial, m)) +
+  geom_bar(stat='identity', color='black', fill='grey', alpha = 0.5) +
+  geom_errorbar(aes(ymin=m-s, ymax=m+s), width=0.2) +
+  annotate(x = 2, y = 600,geom = 'text', label = '*', size = 12/ggplot2::.pt) +
+  # geom_point(position = position_jitter(width = 0.25)) +
+  xlab('Trial Number') +
+  ylab('Estimated Blood Loss (mL)') +
+  scale_y_continuous(expand=c(0,0), limits = c(0, 650)) +
+  # facet_wrap(~Group) +
+  theme_bw() +
+  theme(
+    text = element_text(size = 12),
+    axis.text = element_text(size=12),
+    # axis.title = element_text(size=12),
+    axis.title.x = element_blank(),
+    panel.grid.major.x = element_blank(),
+    legend.position = 'none',
+    strip.text = element_text(size = 12)
+  )
+
+overall_ebl
+```
+
+```{r}
+pre_by_group_ebl_data <- ebl_data %>% 
+  filter(trial != 'Trial 3', SurveyID %in% ebl_all_paired)
+
+by_group_ebl_data <- pre_by_group_ebl_data %>%
+  group_by(Group, trial) %>%
+  dplyr::summarise(m=mean(value, na.rm=T), s = sd(value)/sqrt(length(value[!is.na(value)])), count=n())
+
+
+# Prep signficance data
+sig_text_ebl_bar_plot_data_group <- pre_by_group_ebl_data %>%
+  dcast(SurveyID + Group ~ trial, value.var='value') %>%
+  group_by(Group) %>%
+  dplyr::summarise(
+    p=t.test(`Trial 1`, `Trial 2`)$p.value
+  ) %>%
+  mutate(
+    label=ifelse(p < 0.05, '*', 'ns'),
+    x = ifelse(Group=='Attending', 1.225, 2.225),
+    trial='Trial 2',
+    m = 810 * 300/310
+  )
+
+by_group_ebl <- ggplot(by_group_ebl_data, aes(Group, m, fill=trial)) +
+  geom_bar(stat='identity', color='black', position = position_dodge()) +
+  geom_errorbar(aes(ymin=m-s, ymax=m+s), width=0.2, position = position_dodge(width=0.9)) +
+  geom_text(data=sig_text_ebl_bar_plot_data_group, aes(x, m, label=label), size=12/ggplot2:::.pt) +
+  # annotate(x = 2, y = 750,geom = 'text', label = '*', size = 12) +
+  guides(fill=guide_legend(title='', title.position = 'bottom')) +
+  # geom_point(position = position_jitter(width = 0.25)) +
+  scale_fill_brewer() +
+  xlab('Trial Number') +
+  ylab('Estimated Blood Loss (mL)') +
+  scale_y_continuous(expand=c(0,0), limits = c(0, 810)) +
+  theme_bw() +
+  theme(
+    text = element_text(size = 12),
+    axis.text = element_text(size=12),
+    # axis.title = element_text(size=12),
+    axis.title.x = element_blank(),
+    panel.grid.major.x = element_blank(),
+    legend.position= 'none',
+    # legend.position = c(0.01,0.99),
+    # legend.justification = c(0,1),
+    # legend.background = element_rect(fill='transparent'),
+    # legend.text = element_text(size=12),
+    strip.text = element_text(size = 12)
+  )
+
+by_group_ebl
+```
+
+```{r}
+ebl_test_test_values <- ebl_data %>%
+  filter(SurveyID %in% ebl_all_paired) %>%
+  # filter(Group == '') %>%
+  filter(!is.na(value), trial %in% c('Trial 1', 'Trial 2')) %>%
+  dcast(SurveyID + Group ~ var, value.var = 'value') %$%
+  t.test(x = `trial 1 ebl`, y = `trial 2 ebl`, paired = T)
+
+ebl_test_test_values_by_group <- ebl_data %>%
+  filter(SurveyID %in% ebl_all_paired) %>%
+  # filter(Group == '') %>%
+  filter(!is.na(value), trial %in% c('Trial 1', 'Trial 2')) %>%
+  dcast(SurveyID + Group ~ var, value.var = 'value') %>%
+  group_by(Group) %>%
+  dplyr::summarise(
+    p=t.test(x = `trial 1 ebl`, y = `trial 2 ebl`, paired = T)$p.value,
+    ci_low=t.test(x = `trial 1 ebl`, y = `trial 2 ebl`, paired = T)$conf.int[1],
+    ci_high=t.test(x = `trial 1 ebl`, y = `trial 2 ebl`, paired = T)$conf.int[2]
+  )
+```
+
+<!-- ## EBL vs. TTH colored by trial -->
+
+```{r}
+scatter_ebl_tth <- raw_data %>% 
+  dplyr::select(SurveyID, Group, `Trial 1 TTH`, `Trial 2 TTH`, `trial 1 ebl`, `trial 2 ebl`) %>%
+  gather(var, value, -SurveyID, -Group) %>%
+  mutate(variable = gsub('.* ', '', var)) %>%
+  mutate(trial = stringr::str_extract(string=var, pattern='[0-9]+')) %>%
+  dcast(SurveyID + Group + trial ~ variable, value.var='value')
+
+change_in_scores <- scatter_ebl_tth %>% 
+  setDT() %>% 
+  dcast(SurveyID + Group ~ trial, value.var=c('ebl', 'TTH')) %>%
+  mutate(change_in_tth=TTH_1 - TTH_2, change_in_ebl = ebl_1 - ebl_2)
+
+ordered_survey_id <- change_in_scores %>%
+  arrange(change_in_tth) %$%
+  SurveyID
+
+change_in_scores %<>% mutate(SurveyID = factor(SurveyID, levels=ordered_survey_id))
+```
+
+```{r}
+# Maybe highlight (with grey in the background) for the ones that improved (right lower quadrant, highlight in red for example)
+tth_change_overall <- ggplot(change_in_scores, aes(SurveyID, change_in_tth, color=Group)) +
+  geom_segment(aes(x = SurveyID, xend=SurveyID, y = 0, yend = change_in_tth)) +
+  geom_point() +
+  guides(color=guide_legend(title = NA, title.position = 'bottom')) +
+  scale_color_jama() +
+  xlab('Individual ranked by improvement based on TTH change') +
+  ylab('TTH seconds saved (Trial 1 vs. Trial 2)') +
+  theme_bw() +
+  theme(
+    legend.position = c(0.01,0.99),
+    legend.justification = c(0,1),
+    legend.background = element_rect(fill='transparent'),
+    legend.text = element_text(size=12),
+    legend.title = element_blank(),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.title.x = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank()
+  )
+```
+
+```{r}
+# Maybe highlight (with grey in the background) for the ones that improved (right lower quadrant, highlight in red for example)
+ebl_change_overall <- ggplot(change_in_scores, aes(SurveyID, change_in_ebl, color=Group)) +
+  geom_segment(aes(x = SurveyID, xend=SurveyID, y = 0, yend = change_in_ebl)) +
+  geom_point() +
+  guides(color=guide_legend(title = NA, title.position = 'bottom')) +
+  scale_color_jama() +
+  xlab('Individual ranked by improvement based on TTH change') +
+  ylab('EBL (mL) saved (Trial 1 vs. Trial 2)') +
+  theme_bw() +
+  theme(
+    legend.position = 'none',
+    # legend.position = c(0.01,0.99),
+    # legend.justification = c(0,1),
+    # legend.background = element_rect(fill='transparent'),
+    # legend.text = element_text(size=12),
+    legend.title = element_blank(),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.title.x = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank()
+  )
+```
+
+```{r}
+# Same plot as above, but instead using % improvement instead of delta
+percent_change_in_scores <- change_in_scores %>% 
+  mutate(TTH=(1-TTH_2/TTH_1)*100, EBL=(1-ebl_2/ebl_1)*100) %>%
+  dplyr::select(SurveyID, Group, TTH, EBL)
+
+order_percent_change_all <- percent_change_in_scores %>%
+  arrange(TTH) %$% SurveyID
+
+percent_change_in_scores %<>% 
+  mutate(SurveyID=factor(SurveyID, order_percent_change_all)) %>%
+  gather(s, v, -SurveyID, -Group) %>%
+  mutate(x=as.integer(SurveyID))
+
+percent_change_in_scores_plot_on_single <- ggplot(percent_change_in_scores, aes(x, v, color=s)) +
+  # geom_segment(aes(x = SurveyID, xend=SurveyID, y = 0, yend = change_in_tth)) +
+  geom_line(size=1.5) +
+  guides(color=guide_legend(title = NA, title.position = 'bottom')) +
+  # scale_color_jama() +
+  scale_color_manual(values=c('grey', 'black')) +
+  xlab('Individual ranked by improvement based on % TTH improvement') +
+  ylab('% improvement') +
+  theme_bw() +
+  theme(
+    legend.position = c(0.01,0.99),
+    legend.justification = c(0,1),
+    legend.background = element_rect(fill='transparent'),
+    legend.text = element_text(size=12),
+    legend.title = element_blank(),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.title.x = element_blank(),
+    axis.title.y = element_text(size=12),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank()
+  )
+
+percent_change_overall_tth_plot <- ggplot(percent_change_in_scores %>% filter(s=='TTH'), aes(x, v, color=Group)) +
+  geom_segment(aes(x = SurveyID, xend=SurveyID, y = 0, yend = v)) +
+  geom_point() +
+  guides(color=guide_legend(title = NA, title.position = 'bottom')) +
+  scale_color_jama() +
+  # scale_color_manual(values=c('grey', 'black')) +
+  xlab('Individual ranked by improvement based on % TTH improvement') +
+  ylab('% improvement') +
+  theme_bw() +
+  theme(
+    legend.position = c(0.01,0.99),
+    legend.justification = c(0,1),
+    legend.background = element_rect(fill='transparent'),
+    legend.text = element_text(size=12),
+    legend.title = element_blank(),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.title.x = element_blank(),
+    axis.title.y = element_text(size=12),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank()
+  )
+
+percent_change_overall_ebl_plot <- ggplot(percent_change_in_scores %>% filter(s=='EBL'), aes(x, v, color=Group)) +
+  geom_segment(aes(x = SurveyID, xend=SurveyID, y = 0, yend = v)) +
+  geom_point() +
+  guides(color=guide_legend(title = NA, title.position = 'bottom')) +
+  scale_color_jama() +
+  # scale_color_manual(values=c('grey', 'black')) +
+  xlab('Individual ranked by improvement based on % TTH improvement') +
+  ylab('% improvement') +
+  theme_bw() +
+  theme(
+    legend.position = c(0.01,0.99),
+    legend.justification = c(0,1),
+    legend.background = element_rect(fill='transparent'),
+    legend.text = element_text(size=12),
+    legend.title = element_blank(),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.title.x = element_blank(),
+    axis.title.y = element_text(size=12),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank()
+  )
+```
+
+```{r}
+ggplot(change_in_scores, aes(color=Group)) +
+  geom_segment(aes(x = SurveyID, xend=SurveyID, y = TTH_1, yend = TTH_2)) +
+  geom_point(aes(x=SurveyID, y= TTH_1), color = 'blue') +
+  geom_point(aes(x=SurveyID, y= TTH_2), color='red') +
+  xlab('Individual ranked by improvement based on TTH change') +
+  ylab('TTH seconds saved (Trial 1 vs. Trial 2)') +
+  theme_bw() +
+  theme(
+    # legend.position = c(0.01,0.99),
+    # legend.justification = c(0,1),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+```
+
+```{r}
+ggplot(change_in_scores, aes(color=Group)) +
+  geom_segment(aes(x = SurveyID, xend=SurveyID, y = TTH_1, yend = TTH_2)) +
+  geom_point(aes(x=SurveyID, y= TTH_1), color = 'blue') +
+  geom_point(aes(x=SurveyID, y= TTH_2), color='red') +
+  xlab('Individual ranked by improvement based on TTH change') +
+  ylab('TTH seconds saved (Trial 1 vs. Trial 2)') +
+  theme_bw() +
+  theme(
+    # legend.position = c(0.01,0.99),
+    # legend.justification = c(0,1),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+```
+
+```{r}
+ggplot(scatter_ebl_tth %>% mutate(SurveyID = factor(SurveyID, levels = ordered_survey_id)), aes(SurveyID, TTH, fill = trial)) +
+  geom_bar(stat = 'identity', position = position_dodge()) +
+  # geom_bar(stat='identity', alpha = 0.5) +
+  ylab('EBL mL saved (Trial 1 vs. Trial 2)') +
+  theme_bw() +
+  theme(
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+```
+
+```{r}
+scatter_plot_attempt <- ggplot(scatter_ebl_tth, aes(TTH, ebl, color=trial)) +
+  geom_point() +
+  # geom_segment(data=change_in_scores, 
+    # aes(x = TTH_1, xend=TTH_2, y = ebl_1, yend = ebl_2), color='grey', alpha = 0.5) +
+  # geom_smooth(method = 'lm') +
+  # geom_density2d() +
+  scale_x_log10() +
+  scale_y_log10() +
+  # facet_wrap(~Group) +
+  theme_bw()
+
+ggsave(scatter_plot_attempt, filename = file.path(plot_dir, 'scatter_plot.pdf'), width = 5, height = 5, device='pdf')
+```
+
+<!-- ## Most improved -->
+
+```{r include=FALSE}
+most_improved_data <- raw_data %>%
+  dplyr::select(SurveyID, Group, tth_columns, `Trial 1 Success`, `Trial 2 Success`) %>%
+  gather(var, value, -SurveyID, -Group, -`Trial 1 Success`, -`Trial 2 Success`) %>%
+  mutate(trial = gsub(' TTH', '', var)) %>%
+  mutate(trial=factor(trial, c('Trial 1', 'Trial 2', 'Trial 3'))) %>%
+  filter(`Trial 1 Success` == 0, `Trial 2 Success` == 1) %>%
+  dplyr::rename(tth=value) %>%
+  left_join(., 
+    raw_data %>%
+      dplyr::select(SurveyID, Group, `Trial 1 Success`, `Trial 2 Success`, ebl_columns) %>%
+      magrittr::set_colnames(gsub('  ', ' ', colnames(.))) %>%
+      gather(var, value, -SurveyID, -Group, -`Trial 1 Success`, -`Trial 2 Success`) %>%
+      mutate(trial = gsub(' ebl', '', var)) %>%
+      mutate(trial=factor(gsub('^t', 'T', trial), c('Trial 1', 'Trial 2', 'Trial 3'))) %>%
+      filter(`Trial 1 Success` == 0, `Trial 2 Success` == 1) %>%
+      dplyr::select(SurveyID, trial, ebl=value),
+    by = c('SurveyID', 'trial')
+  )
+
+types_most_improved <- most_improved_data %>%
+  distinct(SurveyID, Group) %>%
+  group_by(Group) %>%
+  dplyr::summarise(count=n())
+
+most_improved_data_bar_plot_data <- most_improved_data %>% 
+  filter(trial != 'Trial 3') %>% 
+  group_by(trial) %>%
+  dplyr::summarise(
+    tth_m=mean(tth, na.rm = T), 
+    tth_sd=sd(tth, na.rm = T)/sqrt(length(tth[!is.na(tth)])),
+    ebl_m=mean(ebl, na.rm = T), 
+    ebl_sd=sd(ebl, na.rm = T)/sqrt(length(ebl[!is.na(ebl)]))
+  )
+
+ebl_most_improved_stats <- most_improved_data %>%
+  dplyr::select(SurveyID, trial, ebl) %>%
+  dcast(SurveyID ~ trial, value.var='ebl') %$%
+  t.test(`Trial 1`, `Trial 2`, paired=T)
+```
+
+```{r}
+most_improved_tth <- ggplot(most_improved_data_bar_plot_data, aes(trial, tth_m)) +
+  geom_bar(stat='identity', color='black', fill='grey', alpha = 0.5) +
+  geom_errorbar(data=most_improved_data_bar_plot_data %>% filter(trial == 'Trial 2'), aes(ymin=tth_m-tth_sd, ymax=tth_m+tth_sd), width=0.2) +
+  # geom_point(position = position_jitter(width = 0.25)) +
+  scale_fill_jama() +
+  # facet_wrap(~Group) +
+  xlab('Trial Number') +
+  ylab('Time to Hemostasis (sec)') +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 310)) +
+  theme_bw() +
+  theme(
+    text = element_text(size = 12),
+    axis.text = element_text(size=12),
+    # axis.title = element_text(size=12),
+    axis.title.x = element_blank(),
+    panel.grid.major.x = element_blank(),
+    legend.position = 'none',
+    strip.text = element_text(size = 12)
+  )
+
+most_improved_ebl <- ggplot(most_improved_data_bar_plot_data, aes(trial, ebl_m)) +
+  geom_bar(stat='identity', color='black', fill='grey', alpha = 0.5) +
+  geom_errorbar(data=most_improved_data_bar_plot_data, aes(ymin=ebl_m-ebl_sd, ymax=ebl_m+ebl_sd), width=0.2) +
+  # geom_point(position = position_jitter(width = 0.25)) +
+  scale_fill_jama() +
+  # facet_wrap(~Group) +
+  xlab('Trial Number') +
+  ylab('Estimated Blood Loss (mL)') +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 800)) +
+  theme_bw() +
+  theme(
+    text = element_text(size = 12),
+    axis.text = element_text(size=12),
+    # axis.title = element_text(size=12),
+    axis.title.x = element_blank(),
+    panel.grid.major.x = element_blank(),
+    legend.position = 'none',
+    strip.text = element_text(size = 12)
+  )
+```
+
+```{r}
+tth_most_improved_t1_vs_t2 <- ggplot(change_in_scores %>% filter(SurveyID %in% most_improved_data$SurveyID), aes(color=Group)) +
+  geom_segment(aes(x = SurveyID, xend=SurveyID, y = TTH_1, yend = TTH_2)) +
+  geom_point(aes(x=SurveyID, y= TTH_1), color='grey') +
+  geom_point(aes(x=SurveyID, y= TTH_2), color='black') +
+  guides(color=guide_legend(title='', title.position = 'top')) +
+  xlab('Individual ranked by improvement based on TTH change') +
+  ylab('TTH (Trial 1 (grey) vs. Trial 2 (black))') +
+  scale_color_jama() +
+  theme_bw() +
+  theme(
+    legend.position = c(0.01,0.01),
+    legend.justification = c(0,0),
+    legend.background = element_rect(fill='transparent'),
+    legend.text = element_text(size=12),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+```
+
+```{r}
+ebl_most_improved_t1_vs_t2 <- ggplot(change_in_scores %>% filter(SurveyID %in% most_improved_data$SurveyID), aes(color=Group)) +
+  geom_segment(aes(x = SurveyID, xend=SurveyID, y = ebl_1, yend = ebl_2)) +
+  geom_point(aes(x=SurveyID, y= ebl_1), color='grey') +
+  geom_point(aes(x=SurveyID, y= ebl_2), color='black') +
+  guides(color=guide_legend(title='', title.position = 'top')) +
+  xlab('Individual ranked by improvement based on TTH change') +
+  ylab('TTH (Trial 1 (grey) vs. Trial 2 (black))') +
+  scale_color_jama() +
+  theme_bw() +
+  theme(
+    legend.position = c(0.01,0.01),
+    legend.justification = c(0,0),
+    legend.background = element_rect(fill='transparent'),
+    legend.text = element_text(size=12),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+```
+
+```{r}
+line_plot_data_most_improved <- change_in_scores %>%
+  filter(SurveyID %in% most_improved_data$SurveyID) %>%
+  dplyr::select(-change_in_tth, -change_in_ebl) %>%
+  gather(s, v, -SurveyID, -Group) %>%
+  mutate(var=stringr::str_extract(pattern='TTH|ebl', string=s)) %>%
+  mutate(Trial=paste0('Trial ', stringr::str_extract(pattern='[0-9]+', string=s))) %>%
+  reshape2::dcast(SurveyID + Group + Trial ~ var, value.var='v') %>%
+  mutate(SurveyID=factor(SurveyID, levels=ordered_survey_id[which(ordered_survey_id %in% most_improved_data$SurveyID)])) %>%
+  mutate(x=as.integer(SurveyID))
+
+tth_line_most_improved_t1_vs_t2 <- ggplot(line_plot_data_most_improved, aes(x, TTH, color=Trial)) +
+  geom_line(size=1.5) +
+  guides(color=guide_legend(title='', title.position = 'top')) +
+  xlab('Individual ranked by improvement based on TTH change') +
+  ylab('Time to hemostasis (seconds)') +
+  scale_color_manual(values=c('grey', 'black')) +
+  theme_bw() +
+  theme(
+    legend.position = c(0.01,0.01),
+    legend.justification = c(0,0),
+    legend.background = element_rect(fill='transparent'),
+    legend.text = element_text(size=12),
+    axis.text = element_text(size=12),
+    axis.title.x = element_blank(),
+    panel.grid.major.x = element_blank(),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+
+ebl_line_most_improved_t1_vs_t2 <- ggplot(line_plot_data_most_improved, aes(x, ebl, color=Trial)) +
+  geom_line(size=1.5) +
+  guides(color=guide_legend(title='', title.position = 'top')) +
+  xlab('Individual ranked by improvement based on TTH change') +
+  ylab('Estimated blood loss (mL)') +
+  scale_color_manual(values=c('grey', 'black')) +
+  theme_bw() +
+  theme(
+    legend.position = 'none',
+    # legend.position = c(0.01,0.01),
+    # legend.justification = c(0,0),
+    # legend.background = element_rect(fill='transparent'),
+    # legend.text = element_text(size=12),
+    axis.title.x = element_blank(),
+    panel.grid.major.x = element_blank(),
+    axis.text.x = element_blank(),
+    axis.text = element_text(size=12),
+    axis.ticks.x = element_blank()
+  )
+```
+
+```{r}
+# Same plots as above but instead it is % improvement (and then ranked from low to highest % improvement)
+percentage_most_improved <- change_in_scores %>%
+  filter(SurveyID %in% most_improved_data$SurveyID) %>%
+  mutate(TTH=(1-TTH_2/TTH_1)*100, EBL = (1-ebl_2/ebl_1)*100) %>%
+  dplyr::select(SurveyID, Group, TTH, EBL) %>%
+  gather(s, v, -SurveyID, -Group)
+
+order_most_improved <- percentage_most_improved %>%
+  filter(s=='TTH') %>%
+  arrange(v) %$% SurveyID
+
+percentage_most_improved %<>%   
+  mutate(SurveyID=factor(SurveyID, levels=order_most_improved)) %>%
+  mutate(x=as.integer(SurveyID))
+```
+
+```{r}
+combined_line_most_improved_percent <- ggplot(percentage_most_improved, aes(x, v, color=s)) +
+  geom_line(size=1.5) +
+  guides(color=guide_legend(title='', title.position = 'top')) +
+  xlab('Individual ranked by % improvement in TTH') +
+  ylab('% improvement') +
+  scale_color_manual(values=c('grey', 'black')) +
+  theme_bw() +
+  theme(
+    legend.position = c(0.01,0.01),
+    legend.justification = c(0,0),
+    legend.background = element_rect(fill='transparent'),
+    legend.text = element_text(size=12),
+    axis.text = element_text(size=12),
+    axis.title.x = element_blank(),
+    panel.grid.major.x = element_blank(),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+```
+
+```{r}
+raw_data %>%
+  filter(SurveyID %in% most_improved_data$SurveyID) %>%
+  dplyr::select(SurveyID, Group, Totyears, Attyears, Resyears, endolast12mo, cadaverlast12)
+```
+
+
+```{r}
+ggplot(change_in_scores, aes(TTH_1, TTH_2, color=Group)) +
+  geom_point() +
+  geom_abline(slope=1, linetype=2)
+```
+
+<!-- # MIQ -->
+
+```{r}
+quartile_cutoff <- change_in_scores %$% quantile(change_in_tth, na.rm=T, c(0.75))
+data_top_quartile <- change_in_scores %>% 
+  filter(change_in_tth >= quartile_cutoff)
+
+attending_stats_years_in_training_quantile <- raw_data %>%
+  filter(SurveyID %in% data_top_quartile$SurveyID, Group == 'Attending') %>%
+  dplyr::select(Attyears)
+
+top_quartile_mean_values <- data_top_quartile %>%
+  summarise_if(is.numeric, median) %>%
+  mutate(tth_improvement=(1-TTH_2/TTH_1)*100, ebl_improvement=(1-ebl_2/ebl_1)*100)
+
+tth_top_quartile_stats <- data_top_quartile %$%
+  t.test(TTH_1, TTH_2, paired = TRUE)
+
+ebl_top_quartile_stats <- data_top_quartile %$%
+  t.test(ebl_1, ebl_2, paired = TRUE)
+
+quartile_success_rates <- preprocess_for_success_rate %>%
+  filter(SurveyID %in% data_top_quartile$SurveyID) %>%
+  group_by(trial) %>%
+  dplyr::summarise(
+    perc_success=sum(s)/n()*100
+  )
+
+quartile_success_stat_prep <- preprocess_for_success_rate %>%
+  filter(SurveyID %in% data_top_quartile$SurveyID) %>%
+  group_by(trial, s) %>%
+  dplyr::summarise(count=n()) %>%
+  dcast(s ~ trial, value.var='count')
+
+quartile_success_stat_prep[is.na(quartile_success_stat_prep)] <- 0
+quartile_success_stat <- fisher.test(quartile_success_stat_prep[,c('Trial 1', 'Trial 2')])
+```
+
+<!-- ## Changes in Heart Rate -->
+
+<!-- The plot below compares the average and peak heart rates at different points in the trials. -->
+
+```{r include=FALSE}
+heart_rate_columns <- raw_data %>% colnames() %>% .[grep('Peak|Average', .)]
+heart_rate_data <- raw_data %>%
+  dplyr::select(SurveyID, Group, heart_rate_columns) %>%
+  gather(var, value, -SurveyID, -Group) %>%
+  mutate(
+    timing=stringr::str_extract(pattern='Base?line|Trial [12]|Intertrial|Posttrial', var),
+    value_type = stringr::str_extract(pattern='Peak|Average', var)
+  ) %>%
+  mutate(timing=gsub('Basline', 'Baseline', timing)) %>%
+  mutate(timing=factor(timing, c('Baseline', 'Trial 1', 'Intertrial', 'Trial 2', 'Posttrial')))
+
+# To look for those that have complete data
+counts_by_individual <- heart_rate_data %>%
+  filter(value_type=='Peak') %>%
+  group_by(SurveyID) %>%
+  dplyr::summarise(count=length(which(!is.na(value)))) %>%
+  arrange(-count)
+
+complete_heart_rate_data <- heart_rate_data %>%
+  filter(SurveyID %in% (counts_by_individual %>% filter(count > 2) %$% SurveyID))
+
+clean_heart_rate_data <- complete_heart_rate_data %>%
+  dcast(SurveyID + Group + value_type ~ timing, value.var='value') %>%
+  filter(!is.na(Baseline), !is.na(`Trial 1`)) %>%
+  mutate(
+    PT1=`Trial 1`/Baseline, 
+    PIT=Intertrial/Baseline, 
+    PT2=`Trial 2`/Baseline, 
+    PPT=Posttrial/Baseline
+  )
+```
+
+```{r}
+base_line_t1_peak_avg <- clean_heart_rate_data %>%
+  filter(value_type=='Average') %$%
+  t.test(`Trial 1`, Baseline, paired = T)
+
+base_line_t2_peak_avg <- clean_heart_rate_data %>%
+  filter(value_type=='Average') %$%
+  t.test(`Trial 2`, Baseline, paired = T)
+
+number_tachycardic <- complete_heart_rate_data %>%
+  group_by(value_type, timing) %>%
+  dplyr::summarise(
+    num_tachy=length(value[value > 100]), 
+    percent_tachy=length(value[value > 100])/n(),
+    num_extreme_tachy=length(value[value > 120]), 
+    percent_extreme_tachy=length(value[value > 120])/n(),
+    total=n()
+  )
+
+contig_table_values <- number_tachycardic %>%
+  filter(timing %in% c('Baseline', 'Trial 1', 'Intertrial', 'Trial 2', 'Posttrial')) %>%
+  mutate(num_not_tachy=total-num_tachy, num_not_e_tachy=total-num_extreme_tachy) %>%
+  dplyr::select(value_type, timing, num_tachy, num_not_tachy, num_extreme_tachy, num_not_e_tachy)
+
+tachy_table <- contig_table_values %>%
+  ungroup() %>%
+  filter(value_type=='Peak', timing %in% c('Baseline', 'Trial 1')) %>%
+  dplyr::select(timing, num_tachy, num_not_tachy) %>%
+  column_to_rownames('timing') %>%
+  fisher.test()
+
+extreme_tachy_table <- contig_table_values %>%
+  ungroup() %>%
+  filter(value_type=='Peak', timing %in% c('Baseline', 'Trial 1')) %>%
+  dplyr::select(timing, num_extreme_tachy, num_not_e_tachy) %>%
+  column_to_rownames('timing') %>%
+  fisher.test()
+
+significance_hr <- NULL
+for (i in c('Trial 1', 'Intertrial', 'Trial 2', 'Posttrial')) {
+  for (j in c('Average', 'Peak')) {
+    da <- clean_heart_rate_data %>%
+      filter(value_type==j)
+    p_val <- t.test(da[,i], da[,'Baseline'])$p.value
+    
+    significance_hr %<>% rbind(data.frame(timing=i, value_type=j, p=p_val))
+  }
+}
+
+significance_hr %<>% 
+  mutate(timing=factor(timing, levels=c('Baseline', 'Trial 1', 'Intertrial', 'Trial 2', 'Posttrial'))) %>%
+  mutate(label=ifelse(p < 0.05, '*', 'ns'))
+```
+
+```{r}
+for (vt in c('Average', 'Peak')) {
+  print(paste0('--- Comparison in ', vt, ' HR ---'))
+  t1_v_base <- clean_heart_rate_data %>%
+    filter(value_type==vt) %$%
+    t.test(`Trial 1`, Baseline) 
+  
+  print(paste0('T1 vs baseline: p=', round(t1_v_base$p.value, 3)))
+  
+  t2_v_inter <- clean_heart_rate_data %>%
+    filter(value_type==vt) %$%
+    t.test(`Trial 2`, Intertrial) 
+  
+  print(paste0('T2 vs intertrial: p=', round(t2_v_inter$p.value, 3)))
+}
+```
+
+```{r}
+# Simple box plot of heart rate data
+heart_rate_data_bar <- complete_heart_rate_data %>%
+  group_by(timing, value_type) %>%
+  dplyr::summarise(m=mean(value, na.rm = T), s=sd(value, na.rm = T)/sqrt(length(value[!is.na(value)]))) %>%
+  ungroup() %>%
+  mutate(timing=factor(timing, levels=c('Baseline', 'Trial 1', 'Intertrial', 'Trial 2', 'Posttrial')))
+```
+
+```{r}
+heart_rate_average_plot <- ggplot(heart_rate_data_bar %>% filter(value_type=='Average'), aes(timing, m)) +
+  geom_bar(stat = 'identity', color = 'black', alpha=0.5, fill='grey') +
+  geom_errorbar(aes(ymin=m-s, ymax=m+s), width = 0.2) +
+  geom_text(data = significance_hr %>% filter(value_type=='Average') %>% mutate(m=110), aes(timing, m, label=label), size=12/ggplot2:::.pt) +
+  # geom_point(position = position_jitter(width = 0.25)) +
+  # stat_summary(fun.y = 'mean', geom = 'line', color='black') +
+  # scale_fill_jama() +
+  coord_cartesian(ylim = c(80,110)) +
+  # facet_wrap(~Group) +
+  xlab('') +
+  ylab('') +
+  ggtitle('Average participant heart rate') +
+  theme_bw() +
+  theme(
+    text = element_text(size = 12),
+    axis.text = element_text(size=12),
+    # axis.title = element_text(size=12),
+    axis.title.x = element_blank(),
+    panel.grid.major.x = element_blank(),
+    legend.position = 'none',
+    strip.text = element_text(size = 12)
+  )
+
+heart_rate_average_plot
+
+heart_rate_peak_plot <- ggplot(heart_rate_data_bar %>% filter(value_type=='Peak'), aes(timing, m)) +
+  geom_bar(stat = 'identity', color = 'black', alpha=0.5, fill='grey') +
+  # geom_point(data = complete_heart_rate_data %>% filter(value_type=='Peak') %>% mutate(m=value), position = position_jitter()) +
+  geom_errorbar(aes(ymin=m-s, ymax=m+s), width = 0.2) +
+  geom_text(data = significance_hr %>% filter(value_type=='Peak') %>% mutate(m=110), aes(timing, m, label=label), size=12/ggplot2:::.pt) +
+  # geom_point(position = position_jitter(width = 0.25)) +
+  # stat_summary(fun.y = 'mean', geom = 'line', color='black') +
+  # scale_fill_jama() +
+  coord_cartesian(ylim = c(80,110)) +
+  # facet_wrap(~Group) +
+  xlab('') +
+  ylab('') +
+  ggtitle('Peak participant heart rate') +
+  theme_bw() +
+  theme(
+    text = element_text(size = 12),
+    axis.text = element_text(size=12),
+    # axis.title = element_text(size=12),
+    axis.title.x = element_blank(),
+    panel.grid.major.x = element_blank(),
+    legend.position = 'none',
+    strip.text = element_text(size = 12)
+  )
+
+heart_rate_peak_plot
+```
+
+```{r eval=FALSE}
+# Heart rate vs. TTH
+combined_hr_tth <- complete_heart_rate_data %>%
+  filter(grepl('Trial', var), value_type=='Peak') %>%
+  mutate(trial=timing) %>%
+  dplyr::select(SurveyID, Group, trial, HR=value) %>%
+  left_join(., tth_data %>% dplyr::select(SurveyID, Group, trial, TTH=value), by=c('SurveyID', 'Group', 'trial'))
+
+ggplot(combined_hr_tth %>% filter(TTH < 300), aes(HR, TTH, color=trial)) +
+  geom_point()
+```
+
+<!-- A plot of the heart rate data, with t-tests done comparing each group to the baseline HR -->
+
+```{r}
+ggplot(heart_rate_data, aes(timing, value)) +
+  geom_boxplot(outlier.shape = NA) +
+  # geom_point(position = position_jitter(width = 0.25)) +
+  stat_compare_means(method = "anova", label.y = 180) +
+  stat_compare_means(label = "p.signif", method = "t.test",
+                     ref.group = "Baseline", label.y = 170) +  
+  xlab('Training status') +
+  ylab('Heart rate') +
+  facet_wrap(Group~value_type, ncol = 2)
+```
+
+```{r}
+# To present it as a bar plot instead
+ggbarplot(heart_rate_data %>% filter(!is.na(value), value_type=='Average'), x="timing", y="value", add="mean_se") +
+  # geom_bar(stat = 'identity') +
+  stat_compare_means() +
+  stat_compare_means(label = "p.signif", method = "t.test",
+                     ref.group = "Baseline", label.y = 120) +  
+  xlab('Training status') +
+  ylab('Heart rate') +
+  facet_wrap(~value_type, ncol = 1)
+```
+
+<!-- ## Coaching -->
+
+```{r}
+coaching_data <- complete_data %>% filter(!is.na(`Trial 3 Start Time (hhmmss)`))
+```
+
+```{r include=FALSE}
+coaching_tth_data <- coaching_data %>%
+  dplyr::select(SurveyID, Group, tth_columns) %>%
+  gather(var, value, -SurveyID, -Group) %>%
+  mutate(trial = gsub(' TTH', '', var)) %>%
+  mutate(trial=factor(trial, c('Trial 1', 'Trial 2', 'Trial 3')))
+
+tth_coaching_p_values_t1_t2 <- coaching_data %>%
+  dplyr::select(SurveyID, Group, tth_columns) %>%
+  gather(var, value, -SurveyID, -Group) %>%
+  mutate(trial = gsub(' TTH', '', var)) %>%
+  filter(trial %in% paste0('Trial ', c(1,2,3))) %>%
+  reshape2::dcast(SurveyID + Group ~ trial, value.var='value') %>%
+  dplyr::summarise(
+    t1_t2_p = t.test(`Trial 1`, `Trial 2`)$p.value,
+    t1_t2_conf_min = t.test(`Trial 1`, `Trial 2`)$conf.int[1],
+    t1_t2_conf_max = t.test(`Trial 1`, `Trial 2`)$conf.int[2],
+    t1_t3_p = t.test(`Trial 1`, `Trial 3`)$p.value,
+    t1_t3_conf_min = t.test(`Trial 1`, `Trial 3`)$conf.int[1],
+    t1_t3_conf_max = t.test(`Trial 1`, `Trial 3`)$conf.int[2],
+    t2_t3_p = t.test(`Trial 2`, `Trial 3`)$p.value,
+    t2_t3_conf_min = t.test(`Trial 2`, `Trial 3`)$conf.int[1],
+    t2_t3_conf_max = t.test(`Trial 2`, `Trial 3`)$conf.int[2]
+  )
+
+coaching_mean_tth <- coaching_tth_data %>%
+  group_by(trial, Group) %>%
+  dplyr::summarise(m=mean(value, na.rm = T))
+```
+
+```{r}
+coaching_tth_data_bar <- coaching_tth_data %>%
+  group_by(trial) %>%
+  dplyr::summarise(m=mean(value, na.rm = T), s=sd(value, na.rm = T)/sqrt(length(value[!is.na(value)])))
+
+# Create the p values data
+coaching_tth_overall_p_value_text <- data.frame(
+  base=c('Trial 1', 'Trial 1', 'Trial 2'),
+  group=c('Trial 2', 'Trial 3', 'Trial 3'),
+  p=c(tth_coaching_p_values_t1_t2[1,'t1_t2_p'], tth_coaching_p_values_t1_t2[1,'t1_t3_p'], tth_coaching_p_values_t1_t2[1,'t2_t3_p']),
+  m=c(280+5, 300+5, 250+5),
+  x=c(1.5, 2, 2.5),
+  stringsAsFactors = F
+) %>% mutate(
+  trial=NA,
+  label = ifelse(p < 0.001, 'p < 0.001', paste0('p = ', round(p, 3)))
+)
+
+coaching_tth_overall_plot <- ggplot(coaching_tth_data_bar, aes(trial, m, fill=trial)) +
+  geom_bar(stat = 'identity', color = 'black', alpha=0.5, fill='grey') +
+  geom_errorbar(aes(ymin=m-s, ymax=m+s), width = 0.2) +
+  geom_text(data=coaching_tth_overall_p_value_text, aes(x, m, label=label), size=12/ggplot2:::.pt) +
+  annotate("segment", x=1, xend=2, y=280-5, yend=280-5, color='black') +
+  annotate("segment", x=1, xend=1, y=280-5, yend=280-10, color='black') +
+  annotate("segment", x=2, xend=2, y=280-5, yend=280-10, color='black') +
+  
+  annotate("segment", x=1, xend=3, y=300-5, yend=300-5, color='black') +
+  annotate("segment", x=1, xend=1, y=300-5, yend=300-10, color='black') +
+  annotate("segment", x=3, xend=3, y=300-5, yend=300-10, color='black') +
+  
+  annotate("segment", x=2, xend=3, y=250-5, yend=250-5, color='black') +
+  annotate("segment", x=2, xend=2, y=250-5, yend=250-10, color='black') +
+  annotate("segment", x=3, xend=3, y=250-5, yend=250-10, color='black') +
+  # annotate(geom = 'text', x = 3, y = 320*300/310, label = '*', size = 12/ggplot2:::.pt) +
+  # geom_point(position = position_jitter(width = 0.25)) +
+  # stat_summary(fun.y = 'mean', geom = 'line', color='black') +
+  # scale_fill_jama() +
+  scale_y_continuous(limits = c(0,320), expand = c(0,0)) +
+  # facet_wrap(~Group) +
+  xlab('Trial Number') +
+  ylab('Time to Hemostasis') +
+  theme_bw() +
+  theme(
+    text = element_text(size = 12),
+    axis.text = element_text(size=12),
+    # axis.title = element_text(size=12),
+    axis.title.x = element_blank(),
+    panel.grid.major.x = element_blank(),
+    legend.position = 'none',
+    strip.text = element_text(size = 12)
+  )
+
+coaching_tth_overall_plot
+```
+
+```{r include=FALSE}
+coaching_ebl_data <- coaching_data %>%
+  dplyr::select(SurveyID, Group, ebl_columns) %>%
+  magrittr::set_colnames(gsub('  ', ' ', colnames(.))) %>%
+  gather(var, value, -SurveyID, -Group) %>%
+  mutate(trial = gsub(' ebl', '', var)) %>%
+  mutate(trial=factor(gsub('^t', 'T', trial), c('Trial 1', 'Trial 2', 'Trial 3')))
+
+ebl_coaching_p_values_t1_t2 <- coaching_data %>%
+  dplyr::select(SurveyID, Group, ebl_columns) %>%
+  magrittr::set_colnames(gsub('  ', ' ', colnames(.))) %>%
+  gather(var, value, -SurveyID, -Group) %>%
+  mutate(trial = gsub(' ebl', '', var)) %>%
+  mutate(trial=gsub('^t', 'T', trial)) %>%
+  filter(trial %in% paste0('Trial ', c(1,2,3))) %>%
+  reshape2::dcast(SurveyID + Group ~ trial, value.var='value') %>%
+  dplyr::summarise(
+    t1_t2_p = t.test(`Trial 1`, `Trial 2`)$p.value,
+    t1_t2_conf_min = t.test(`Trial 1`, `Trial 2`)$conf.int[1],
+    t1_t2_conf_max = t.test(`Trial 1`, `Trial 2`)$conf.int[2],
+    t1_t3_p = t.test(`Trial 1`, `Trial 3`)$p.value,
+    t1_t3_conf_min = t.test(`Trial 1`, `Trial 3`)$conf.int[1],
+    t1_t3_conf_max = t.test(`Trial 1`, `Trial 3`)$conf.int[2],
+    t2_t3_p = t.test(`Trial 2`, `Trial 3`)$p.value,
+    t2_t3_conf_min = t.test(`Trial 2`, `Trial 3`)$conf.int[1],
+    t2_t3_conf_max = t.test(`Trial 2`, `Trial 3`)$conf.int[2]
+  )
+
+# ggplot(coaching_ebl_data, aes(trial, value)) +
+#   geom_boxplot(outlier.shape=NA) +
+#   stat_compare_means(label = "p.signif", method = "t.test",
+#                      ref.group = "Trial 1")
+
+coaching_mean_ebl <- coaching_ebl_data %>%
+  group_by(trial, Group) %>%
+  dplyr::summarise(m=mean(value, na.rm = T))
+```
+
+```{r}
+coaching_ebl_data_bar <- coaching_ebl_data %>%
+  group_by(trial) %>%
+  dplyr::summarise(m=mean(value, na.rm = T), s=sd(value, na.rm = T)/sqrt(length(value[!is.na(value)])))
+
+# Create the p values data
+coaching_ebl_overall_p_value_text <- data.frame(
+  base=c('Trial 1', 'Trial 1', 'Trial 2'),
+  group=c('Trial 2', 'Trial 3', 'Trial 3'),
+  p=c(ebl_coaching_p_values_t1_t2[1,'t1_t2_p'], ebl_coaching_p_values_t1_t2[1,'t1_t3_p'], ebl_coaching_p_values_t1_t2[1,'t2_t3_p']),
+  m=c(500+5, 540+5, 450+5),
+  x=c(1.5, 2, 2.5),
+  stringsAsFactors = F
+) %>% mutate(
+  trial=NA,
+  label = ifelse(p < 0.001, 'p < 0.001', paste0('p = ', round(p, 3)))
+)
+
+coaching_ebl_overall_plot <- ggplot(coaching_ebl_data_bar, aes(trial, m, fill=trial)) +
+  geom_bar(stat = 'identity', color = 'black', alpha=0.5, fill='grey') +
+  geom_errorbar(aes(ymin=m-s, ymax=m+s), width = 0.2) +
+  geom_text(data = coaching_ebl_overall_p_value_text, aes(x, m, label=label), size=12/ggplot2:::.pt) +
+  annotate("segment", x=1, xend=2, y=500-10, yend=500-10, color='black') +
+  annotate("segment", x=1, xend=1, y=500-10, yend=500-15, color='black') +
+  annotate("segment", x=2, xend=2, y=500-10, yend=500-15, color='black') +
+  
+  annotate("segment", x=1, xend=3, y=540-10, yend=540-10, color='black') +
+  annotate("segment", x=1, xend=1, y=540-10, yend=540-15, color='black') +
+  annotate("segment", x=3, xend=3, y=540-10, yend=540-15, color='black') +
+  
+  annotate("segment", x=2, xend=3, y=450-10, yend=450-10, color='black') +
+  annotate("segment", x=2, xend=2, y=450-10, yend=450-15, color='black') +
+  annotate("segment", x=3, xend=3, y=450-10, yend=450-15, color='black') +
+  # geom_point(position = position_jitter(width = 0.25)) +
+  # stat_summary(fun.y = 'mean', geom = 'line', color='black') +
+  # scale_fill_jama() +
+  scale_y_continuous(limits = c(0,560), expand = c(0,0)) +
+  # facet_wrap(~Group) +
+  xlab('Trial Number') +
+  ylab('Estimated blood loss (mL)') +
+  theme_bw() +
+  theme(
+    text = element_text(size = 12),
+    axis.text = element_text(size=12),
+    # axis.title = element_text(size=12),
+    axis.title.x = element_blank(),
+    panel.grid.major.x = element_blank(),
+    legend.position = 'none',
+    strip.text = element_text(size = 12)
+  )
+
+coaching_ebl_overall_plot
+```
+
+```{r}
+success_rate_data_coaching <- coaching_data %>% 
+  dplyr::select(SurveyID, `Trial 1` = `Trial 1 Success`, `Trial 2`=`Trial 2 Success`, `Trial 3`=`Trial 3 Success`) %>%
+  gather(trial, s, -SurveyID) %>%
+  filter(!is.na(s))
+success_rate_coaching <- success_rate_data_coaching %>%
+  group_by(trial) %>%
+  dplyr::summarise( 
+    rate=length(which(s==1))/n()
+  )
+
+contig_coach_success_prep <- success_rate_data_coaching %>%
+  dcast(s ~ trial) %>%
+  mutate(r=ifelse(s==0, 'fail', 'success'))
+
+contig_success_t1_t2 <- contig_coach_success_prep %>%
+  dplyr::select(r, `Trial 1`, `Trial 2`) %>%
+  column_to_rownames(var='r') %>%
+  fisher.test()
+
+contig_success_t1_t3 <- contig_coach_success_prep %>%
+  dplyr::select(r, `Trial 1`, `Trial 3`) %>%
+  column_to_rownames(var='r') %>%
+  fisher.test()
+
+contig_success_t2_t3 <- contig_coach_success_prep %>%
+  dplyr::select(r, `Trial 2`, `Trial 3`) %>%
+  column_to_rownames(var='r') %>%
+  fisher.test()
+
+success_coaching_p_values <- data.frame(
+  p=c(contig_success_t1_t2$p.value, contig_success_t1_t3$p.value, contig_success_t2_t3$p.value),
+  x=c(1.5, 2, 2.5),
+  rate=c(.8+.02, 1.1+.02, 1.02+0.02),
+  trial = NA,
+  stringsAsFactors = F
+) %>%
+  mutate(text=ifelse(p < 0.001, 'p < 0.001', paste0('p=', round(p, 3))))
+
+coaching_success_rate <- ggplot(success_rate_coaching, aes(trial, rate)) +
+  geom_bar(stat = 'identity', color='black', fill='grey', alpha = 0.5) +
+  geom_text(data=success_coaching_p_values, aes(x, rate, label=text), size=12/ggplot2:::.pt) +
+  annotate("segment", x=1, xend=2, y=.8-.02, yend=.8-.02, color='black') +
+  annotate("segment", x=1, xend=1, y=.8-.02, yend=.8-.05, color='black') +
+  annotate("segment", x=2, xend=2, y=.8-.02, yend=.8-.05, color='black') +
+  
+  annotate("segment", x=1, xend=3, y=1.1-.02, yend=1.1-.02, color='black') +
+  annotate("segment", x=1, xend=1, y=1.1-.02, yend=1.1-.05, color='black') +
+  annotate("segment", x=3, xend=3, y=1.1-.02, yend=1.1-.05, color='black') +
+  
+  annotate("segment", x=2, xend=3, y=1.02-.02, yend=1.02-.02, color='black') +
+  annotate("segment", x=2, xend=2, y=1.02-.02, yend=1.02-.05, color='black') +
+  annotate("segment", x=3, xend=3, y=1.02-.02, yend=1.02-.05, color='black') +
+  
+  # scale_fill_jama() +
+  # facet_wrap(~Group) +
+  xlab('Trial Number') +
+  ylab('Trial success rate') +
+  scale_y_continuous(limits = c(0, 1.20), expand = c(0,0)) +
+  theme_bw() +
+  theme(
+    text = element_text(size = 12),
+    axis.text = element_text(size=12),
+    # axis.title = element_text(size=12),
+    axis.title.x = element_blank(),
+    panel.grid.major.x = element_blank(),
+    legend.position = 'none',
+    strip.text = element_text(size = 12)
+  )
+
+coaching_success_rate
+```
+
+
+# Final figures
+
+```{r}
+figure1_top <- ggpubr::ggarrange(
+  overall_success_rate, tth_overall_plot, overall_ebl, 
+  nrow=1, labels=c("a", "b", "c"), widths = c(1,1,1)
+)
+
+figure1_bottom <- ggpubr::ggarrange(
+  tth_change_overall, ebl_change_overall, widths = c(1,1), labels = c("d", "e")
+  # common.legend = T, legend='right' 
+)
+
+figure1_bottom2 <- ggpubr::ggarrange(
+  percent_change_overall_tth_plot, percent_change_overall_ebl_plot, widths = c(1,1), labels=c('d', 'e')
+)
+ggsave(figure1_bottom2, width = 10, height = 5, units = 'in', filename = file.path(plot_dir, 'overall_performance_alt_bottom.pdf'), device = 'pdf')
+
+figure1_bottom_combined <- ggpubr::ggarrange(
+  percent_change_in_scores_plot_on_single, labels=c('d')
+)
+
+ggsave(figure1_bottom_combined, width = 10, height = 5, units = 'in', filename = file.path(plot_dir, 'overall_performance_alt_combined_bottom.pdf'), device = 'pdf')
+
+
+figure1 <- annotate_figure(ggpubr::ggarrange(
+  figure1_top, figure1_bottom, heights = c(1,1.5), nrow = 2
+), bottom = text_grob('Individual ranked by improvement in TTH'))
+
+ggsave(figure1, width = 10, height = 8, units = 'in', filename = paste0(plot_dir, '/overall_performance.pdf'), device = 'pdf')
+```
+
+```{r}
+figure_legend_data <- list(
+  fig1a = list(
+    trial_1_success=success_rate_overall %>% filter(trial=='Trial 1') %$% rate * 100 %>% round(., 1),
+    trial_2_success=success_rate_overall %>% filter(trial=='Trial 2') %$% rate * 100 %>% round(., 1),
+    p_value=formatC(fisher_success_overall$p.value, format='e', digits=2)
+  ),
+  fig1b = list(
+    trial_1_mean=tth_data_m_median %>% filter(trial=='Trial 1') %$% m[1] %>% round(., 1),
+    trial_2_mean=tth_data_m_median %>% filter(trial=='Trial 2') %$% m[1] %>% round(., 1),
+    p_value=formatC(tth_data_t_test$p.value, format = "e", digits = 2),
+    confidence=round(tth_data_t_test$conf.int, 1)
+  ),
+  fig1c = list(
+    trial_1_mean=overall_ebl_data %>% filter(trial=='Trial 1') %$% m[1] %>% round(., 1),
+    trial_2_mean=overall_ebl_data %>% filter(trial=='Trial 2') %$% m[1] %>% round(., 1),
+    p_value=formatC(ebl_test_test_values$p.value, format = "e", digits = 2),
+    confidence=round(ebl_test_test_values$conf.int, 1)
+  ),
+  suppfig1a = list(
+    attending = list(
+      trial_1_success=success_rate_by_group %>% filter(trial=='Trial 1', Group=='Attending') %$% rate * 100 %>% round(., 1),
+      trial_2_success=success_rate_by_group %>% filter(trial=='Trial 2', Group=='Attending') %$% rate * 100 %>% round(., 1),
+      p_value=formatC(fisher_attendings_success_rate$p.value, format='e', digits=2)
+    ),
+    resident = list(
+      trial_1_success=success_rate_by_group %>% filter(trial=='Trial 1', Group=='Trainee') %$% rate * 100 %>% round(., 1),
+      trial_2_success=success_rate_by_group %>% filter(trial=='Trial 2', Group=='Trainee') %$% rate * 100 %>% round(., 1),
+      p_value=formatC(fisher_residents_success_rate$p.value, format='e', digits=2)
+    )
+  ),
+  suppfig1b = list(
+    attending = list(
+      trial_1_mean=tth_data_t_test_by_group %>% filter(Group=='Attending') %$% m_t1[1] %>% round(., 1),
+      trial_2_mean=tth_data_t_test_by_group %>% filter(Group=='Attending') %$% m_t2[1] %>% round(., 1),
+      p_value=formatC((tth_data_t_test_by_group %>% filter(Group=='Attending') %$% p[1]), format = "e", digits = 2),
+      confidence=round((tth_data_t_test_by_group %>% filter(Group=='Attending') %$% c(ci_low[1], ci_high[1])), 1)
+    ),
+    resident = list(
+      trial_1_mean=tth_data_t_test_by_group %>% filter(Group=='Trainee') %$% m_t1[1] %>% round(., 1),
+      trial_2_mean=tth_data_t_test_by_group %>% filter(Group=='Trainee') %$% m_t2[1] %>% round(., 1),
+      p_value=formatC((tth_data_t_test_by_group %>% filter(Group=='Trainee') %$% p[1]), format = "e", digits = 2),
+      confidence=round((tth_data_t_test_by_group %>% filter(Group=='Trainee') %$% c(ci_low[1], ci_high[1])), 1)
+    )
+  ),
+  suppfig1c = list(
+    attending = list(
+      trial_1_mean=by_group_ebl_data %>% filter(Group=='Attending', trial=='Trial 1') %$% m[1] %>% round(., 1),
+      trial_2_mean=by_group_ebl_data %>% filter(Group=='Attending', trial=='Trial 2') %$% m[1] %>% round(., 1),
+      p_value=formatC((ebl_test_test_values_by_group %>% filter(Group=='Attending') %$% p[1]), format = "e", digits = 2),
+      confidence=round((ebl_test_test_values_by_group %>% filter(Group=='Attending') %$% c(ci_low[1], ci_high[1])), 1)
+    ),
+    resident = list(
+      trial_1_mean=by_group_ebl_data %>% filter(Group=='Trainee', trial=='Trial 1') %$% m[1] %>% round(., 1),
+      trial_2_mean=by_group_ebl_data %>% filter(Group=='Trainee', trial=='Trial 2') %$% m[1] %>% round(., 1),
+      p_value=formatC((ebl_test_test_values_by_group %>% filter(Group=='Trainee') %$% p[1]), format = "e", digits = 2),
+      confidence=round((ebl_test_test_values_by_group %>% filter(Group=='Trainee') %$% c(ci_low[1], ci_high[1])), 1)
+    )
+  ),
+  fig2b = list(
+    trial_1_mean=coaching_mean_tth %>% filter(trial == 'Trial 1') %$% m[1] %>% round(., 1),
+    trial_2_mean=coaching_mean_tth %>% filter(trial == 'Trial 2') %$% m[1] %>% round(., 1),
+    trial_3_mean=coaching_mean_tth %>% filter(trial == 'Trial 3') %$% m[1] %>% round(., 1),
+    p_value_t1_t2=tth_coaching_p_values_t1_t2[1,"t1_t2_p"],
+    p_value_t1_t3=tth_coaching_p_values_t1_t2[1,"t1_t3_p"],
+    p_value_t2_t3=tth_coaching_p_values_t1_t2[1,"t2_t3_p"]
+  ),
+  fig2c = list(
+    trial_1_mean=coaching_mean_ebl %>% filter(trial == 'Trial 1') %$% m[1] %>% round(., 1),
+    trial_2_mean=coaching_mean_ebl %>% filter(trial == 'Trial 2') %$% m[1] %>% round(., 1),
+    trial_3_mean=coaching_mean_ebl %>% filter(trial == 'Trial 3') %$% m[1] %>% round(., 1),
+    p_value_t1_t2=ebl_coaching_p_values_t1_t2[1,"t1_t2_p"],
+    p_value_t1_t3=ebl_coaching_p_values_t1_t2[1,"t1_t3_p"],
+    p_value_t2_t3=ebl_coaching_p_values_t1_t2[1,"t2_t3_p"]
+  )
+)
+```
+
+## Results
+
+A total of `r total_surgeons` surgeons (`r total_ns` neurosurgery (`r round(total_ns/total_surgeons*100)`%), `r total_ent` otolaryngology (`r round(total_ent/total_surgeons*100)`%), `r total_other` other specialty (`r round(total_other/total_surgeons*100)`%)) participated in the standardized simulation session across a variety of educational settings. Of those, `r performed_two_trials` performed 2 trials, with coaching between trials 1 and 2. Of these surgeons, `r attending_two_trials` were attending level and `r trainee_two_trials` were trainees (resident or fellow). The other `r performed_three_trials` participants performed three trials, with coaching between trials 2 and 3. Baseline characteristics, including level of training, prior experience, and baseline confidence in their general endoscopic skills as well as their ability to perform carotid injury repair are reported in Table 1. 
+
+```{r}
+
+```
+
+### Overall Performance
+
+Average TTH between trial 1 and 2 decreased by `r round(100-figure_legend_data$fig1b$trial_2_mean/figure_legend_data$fig1b$trial_1_mean*100)`% for all participants (`r figure_legend_data$fig1b$trial_1_mean` sec vs `r figure_legend_data$fig1b$trial_2_mean` sec, p=`r figure_legend_data$fig1b$p_value`, 95%CI: `r figure_legend_data$fig1b$confidence[1]`-`r figure_legend_data$fig1b$confidence[2]`sec). Similar improvement was seen in estimated blood loss (EBL), with an average decrease of `r round(100-figure_legend_data$fig1c$trial_2_mean/figure_legend_data$fig1c$trial_1_mean*100)`%, from `r figure_legend_data$fig1c$trial_1_mean`mL to `r figure_legend_data$fig1c$trial_2_mean`mL between trials (p=`r figure_legend_data$fig1c$p_value`, 95 % CI: `r figure_legend_data$fig1c$confidence[1]`-`r figure_legend_data$fig1c$confidence[2]`mL). `r round(figure_legend_data$fig1a$trial_1_success)`% of participants succeeded in the task in Trial 1, versus `r figure_legend_data$fig1a$trial_2_success`% of participants succeeding in trial 2 (p=`r figure_legend_data$fig1a$p_value`). These metrics improved regardless of prior level of experience. 
+
+Amongst attendings, TTH decreased `r round(100-figure_legend_data$suppfig1b$attending$trial_2_mean/figure_legend_data$suppfig1b$attending$trial_1_mean*100)`% from `r figure_legend_data$suppfig1b$attending$trial_1_mean` to `r figure_legend_data$suppfig1b$attending$trial_2_mean` seconds (p=`r figure_legend_data$suppfig1b$attending$p_value`, 95%CI `r figure_legend_data$suppfig1b$attending$confidence[1]`-`r figure_legend_data$suppfig1b$attending$confidence[2]` sec), and EBL decreased `r round(100-figure_legend_data$suppfig1c$attending$trial_2_mean/figure_legend_data$suppfig1c$attending$trial_1_mean*100)`% from `r figure_legend_data$suppfig1c$attending$trial_1_mean` to `r figure_legend_data$suppfig1c$attending$trial_2_mean` mL (p=`r figure_legend_data$suppfig1c$attending$p_value`, 95%CI `r figure_legend_data$suppfig1c$attending$confidence[1]`-`r figure_legend_data$suppfig1c$attending$confidence[2]`mL). `r round(figure_legend_data$suppfig1a$attending$trial_1_success)`% of attendings succeeded in the task in Trial 1, versus `r round(figure_legend_data$suppfig1a$attending$trial_2_success)`% of participants succeeding in trial 2 (p=`r figure_legend_data$suppfig1a$attending$p_value`). 
+
+Amongst trainees, TTH decreased `r round(100-figure_legend_data$suppfig1b$resident$trial_2_mean/figure_legend_data$suppfig1b$resident$trial_1_mean*100)`% from `r figure_legend_data$suppfig1b$resident$trial_1_mean` to `r figure_legend_data$suppfig1b$resident$trial_2_mean` seconds (p=`r figure_legend_data$suppfig1b$resident$p_value`, 95%CI `r figure_legend_data$suppfig1b$resident$confidence[1]`-`r figure_legend_data$suppfig1b$resident$confidence[2]` sec), and EBL decreased `r round(100-figure_legend_data$suppfig1c$resident$trial_2_mean/figure_legend_data$suppfig1c$resident$trial_1_mean*100)`% from `r figure_legend_data$suppfig1c$resident$trial_1_mean` to `r figure_legend_data$suppfig1c$resident$trial_2_mean` mL (p=`r figure_legend_data$suppfig1c$resident$p_value`, 95%CI `r figure_legend_data$suppfig1c$resident$confidence[1]`-`r figure_legend_data$suppfig1c$resident$confidence[2]`mL). 
+
+`r round(figure_legend_data$suppfig1a$resident$trial_1_success)`% of trainees succeeded in the task in Trial 1, versus `r round(figure_legend_data$suppfig1a$resident$trial_2_success)`% succeeding in trial 2 (p=`r figure_legend_data$suppfig1a$resident$p_value`). Both attendings and residents reported an increase in carotid confidence (A: Pre:3, Post: 4, p=XX; R: Pre: 2, Post: 3; p=XX). However, there was no correlation between confidence (both general confidence, carotid injury management confidence) and performance measured by TTH (p=XX, p=XX respectively). There was no association between pretrial confidence and performance for attendings or residents (p=XX, XX respectively)
+
+```{r}
+
+```
+
+### Training Rescues and Most Improved Trainees
+
+A total of `r sum(types_most_improved$count)` surgeons were considered training rescues, defined as failure on trial 1 and success on trial 2 (`r types_most_improved %>% filter(Group=='Trainee') %$% count`) residents, `r types_most_improved %>% filter(Group=='Attending') %$% count` attendings). These training rescues had TTH of 300 seconds (failure) on trial 1 and an average TTH of `r round(most_improved_data_bar_plot_data %>% filter(trial=='Trial 2') %$% tth_m)` seconds on trial 2 (`r round(100*(1-(most_improved_data_bar_plot_data %>% filter(trial=='Trial 2') %$% tth_m)/300))`% improvement). Similarly, the average EBL in trial 1 was `r round(most_improved_data_bar_plot_data %>% filter(trial=='Trial 1') %$% ebl_m)`mL versus `r round(most_improved_data_bar_plot_data %>% filter(trial=='Trial 2') %$% ebl_m)`mL in trial 2 (`r round(100*(1-(most_improved_data_bar_plot_data %>% filter(trial=='Trial 2') %$% ebl_m)/most_improved_data_bar_plot_data %>% filter(trial=='Trial 1') %$% ebl_m))`% improvement, p=`r formatC(ebl_most_improved_stats$p.value, format='e', digits=2)`, 95% CI: `r ebl_most_improved_stats$conf.int[1]`-`r ebl_most_improved_stats$conf.int[2]`mL). Attendings and residents in the training rescue group similar experience levels (A: XX vs XX years as attending, p=XX; R: XX vs XX years as resident, p=XX) and percentage of participants who had managed a real ICAI in their practice (XX% vs XX%, p=XX). The training rescue group had fewer endoscopic cases in the past year on average than the non-rescue cohort (XX vs XX, p=XX), however had similar case volume when comparing medians (XX vs XX, p=XX). 
+
+```{r}
+
+```
+
+The most improved quartile (MIQ) of surgeons were also analyzed. The MIQ had a mean trial 1 TTH of `r top_quartile_mean_values[1,'TTH_1']` seconds and a trial 2 TTH of `r top_quartile_mean_values[1,'TTH_2']` seconds [`r round(top_quartile_mean_values[1, 'tth_improvement'])`% improvement, p=`r formatC(tth_top_quartile_stats$p.value, format='e', digits=2)`, 95% CI (difference): `r tth_top_quartile_stats$conf.int[1]`-`r tth_top_quartile_stats$conf.int[2]`]; they had a similar reduction in EBL: trial 1 EBL was `r top_quartile_mean_values[1,'ebl_1']`mL versus `r top_quartile_mean_values[1,'ebl_2']`mL in trial 2 [`r round(top_quartile_mean_values[1, 'ebl_improvement'])`% improvement, p=`r formatC(tth_top_quartile_stats$p.value, format='e', digits=2)`, 95% CI (difference): `r ebl_top_quartile_stats$conf.int[1]`-`r ebl_top_quartile_stats$conf.int[2]`mL]. `r quartile_success_rates %>% filter(trial=='Trial 1') %$% perc_success`% of the MIQ succeeded on trial 1, versus `r quartile_success_rates %>% filter(trial=='Trial 2') %$% perc_success`% success rate in trial 2 (p=`r formatC(quartile_success_stat$p.value, format='e', digits=2)`)). There were `r dim(data_top_quartile %>% filter(Group=='Attending'))[1]` attendings and `r dim(data_top_quartile %>% filter(Group=='Trainee'))[1]` trainees in the MIQ cohort. 
+
+```{r}
+
+```
+
+### Participant Heart Rate During Simulated ICAI
+
+A total of `r length(unique(complete_heart_rate_data$SurveyID))` surgeons had complete baseline and trial data. Participants had a statistically significant mean increase of `r round(base_line_t1_peak_avg$estimate, 1)` bpm from baseline to time 1 (p=`r formatC(base_line_t1_peak_avg$p.value, format = 'e', digits = 2)` by paired t-test) and `r round(base_line_t2_peak_avg$estimate, 1)` bpm from baseline to trial 2 (p=`r formatC(base_line_t2_peak_avg$p.value, format = 'e', digits = 2)` by paired t-test). Significantly more participants became tachycardic (HR>100) during the experiment compared to baseline (`r round(number_tachycardic %>% filter(value_type=='Peak', timing=='Trial 1') %$% percent_tachy * 100, 1)`% vs. `r round(number_tachycardic %>% filter(value_type=='Peak', timing=='Baseline') %$% percent_tachy * 100, 1)`%, Fisher's exact, p=`r formatC(tachy_table$p.value, format='e', digits=2)`). Extreme tachycardia (HR>120) was seen in `r round(number_tachycardic %>% filter(value_type=='Peak', timing=='Trial 1') %$% percent_extreme_tachy * 100, 1)`% of subjects overall and was significantly more likely to occur during the simulation than during the baseline segment (`r round(number_tachycardic %>% filter(value_type=='Peak', timing=='Trial 1') %$% percent_extreme_tachy * 100, 1)`% vs `r round(number_tachycardic %>% filter(value_type=='Peak', timing=='Baseline') %$% percent_extreme_tachy * 100, 1)`%, Fisher's exact, p=`r formatC(extreme_tachy_table$p.value, format='e', digits=2)`). There was no significant relationship between level of training, prior experience with carotid artery injury, pre-procedure confidence or specialty with heart rate. 
+
+```{r}
+
+```
+
+### Effect of Coaching versus Practice 
+
+Twelve participants underwent three trials, with coaching in between trials 2 and 3 (instead of between trials 1 and 2), to assess the effect of coaching versus practice. These participants were not included in prior analysis. Participants in this cohort saw no significant improvement between trials 1 and 2 (Trial 1: TTH `r figure_legend_data$fig2b$trial_1_mean` sec, EBL `r figure_legend_data$fig2c$trial_1_mean`mL; Trial 2: TTH `r figure_legend_data$fig2b$trial_2_mean`sec, EBL `r figure_legend_data$fig2c$trial_2_mean`mL (TTH p=`r figure_legend_data$fig2b$p_value_t1_t2`; EBL p=`r figure_legend_data$fig2c$p_value_t1_t2`). However, after instructional video and coaching, TTH in trial 3 fell to `r figure_legend_data$fig2b$trial_3_mean`s and EBL to `r figure_legend_data$fig2c$trial_3_mean`mL (p=`r figure_legend_data$fig2b$p_value_t2_t3`, p=`r figure_legend_data$fig2c$p_value_t2_t3`, respectively). The percent of participants with task success in Trials 1, 2 and 3 was `r success_rate_coaching %>% filter(trial == 'Trial 1') %$% rate`%, `r success_rate_coaching %>% filter(trial == 'Trial 2') %$% rate`%, and `r success_rate_coaching %>% filter(trial == 'Trial 3') %$% rate`%, respectively. 
+
+```{r}
+
+```
+
+## Figure 1. Overall performance changes trial 1 vs. trial 2
+
+(a) Success rate of participants in trial 1 and 2. 
+(b) Mean time to hemostasis in trial 1 (`r figure_legend_data$fig1b$trial_1_mean` sec) vs. trial 2 (`r figure_legend_data$fig1b$trial_2_mean` sec). p = `r figure_legend_data$fig1b$p_value`, 95% CI: `r figure_legend_data$fig1b$confidence[1]`-`r figure_legend_data$fig1b$confidence[2]` sec. 
+(c) Mean estimated blood loss (mL) in trial 1 (`r figure_legend_data$fig1c$trial_1_mean` mL) vs. trial 2 (`r figure_legend_data$fig1c$trial_2_mean` mL). p = `r figure_legend_data$fig1c$p_value`, 95% CI: `r figure_legend_data$fig1c$confidence[1]`-`r figure_legend_data$fig1c$confidence[2]` mL. 
+(d) Number of seconds saved in time to hemostasis in trial 2 vs. trial 1. Positive values indicate a decrease in time to hemostatis in trial 2 vs. trial 1; negative values indicate an increase. Each point is an individual, with individuals ordered increasingly based on change in time to hemostatis. 
+(e) Same as (d) but comparing estimated blood loss change between trial 1 and trial 2. Individuals are ordered as in (d).
+
+```{r include=TRUE, fig.height=8}
+figure1
+```
+
+```{r}
+suppfigure1 <- ggpubr::ggarrange(
+  by_group_success_rate, tth_split_by_training, by_group_ebl, 
+  nrow=1, labels=c("a", "b", "c"), widths = c(2,2,2), common.legend = T, legend = 'bottom'
+)
+
+ggsave(suppfigure1, width = 10, height = 4, units = 'in', filename = paste0(plot_dir, '/overall_performance_by_group.pdf'), device = 'pdf')
+# fig1_final <- annotate_figure(
+#   figure1,
+#   left = text_grob("Time to hemostasis", color = "black", rot = 90, size = 12)
+# )
+
+# fig1_final
+```
+
+## Supplemental Figure 1. Overall performance split by attending and resident
+
+(a) Success rate of participants in trial 1 and 2, attending and residents split. 
+(b) For attendings, mean time to hemostasis in trial 1 (`r figure_legend_data$suppfig1b$attending$trial_1_mean` sec) vs. trial 2 (`r figure_legend_data$suppfig1b$attending$trial_2_mean` sec). p = `r figure_legend_data$suppfig1b$attending$p_value`, 95% CI: `r figure_legend_data$suppfig1b$attending$confidence[1]`-`r figure_legend_data$suppfig1b$attending$confidence[2]` sec. For residents, mean time to hemostasis in trial 1 (`r figure_legend_data$suppfig1b$resident$trial_1_mean` sec) vs. trial 2 (`r figure_legend_data$suppfig1b$resident$trial_2_mean` sec). p = `r figure_legend_data$suppfig1b$resident$p_value`, 95% CI: `r figure_legend_data$suppfig1b$resident$confidence[1]`-`r figure_legend_data$suppfig1b$resident$confidence[2]` sec. 
+(c) For attendings, mean estimated blood loss in trial 1 (`r figure_legend_data$suppfig1c$attending$trial_1_mean` mL) vs. trial 2 (`r figure_legend_data$suppfig1c$attending$trial_2_mean` mL). p = `r figure_legend_data$suppfig1c$attending$p_value`, 95% CI: `r figure_legend_data$suppfig1c$attending$confidence[1]`-`r figure_legend_data$suppfig1c$attending$confidence[2]` mL. For residents, mean estimated blood loss in trial 1 (`r figure_legend_data$suppfig1c$resident$trial_1_mean` mL) vs. trial 2 (`r figure_legend_data$suppfig1c$resident$trial_2_mean` mL). p = `r figure_legend_data$suppfig1c$resident$p_value`, 95% CI: `r figure_legend_data$suppfig1c$resident$confidence[1]`-`r figure_legend_data$suppfig1c$resident$confidence[2]` mL.
+
+```{r include=TRUE}
+suppfigure1
+```
+
+## Figure 2. Effect of coaching versus practice
+
+(a) Success rate in 12 participants across trials 1, 2, and 3.
+(b) Time to hemostatsis in 12 participants across trial 1, 2, and 3. No significant improvement in trial 1 vs. trial 2 (p=`r figure_legend_data$fig2b$p_value_t1_t2`). Significant improvement in trial 1 vs. trial 3 (p=`r figure_legend_data$fig2b$p_value_t1_t3`).
+(c) Estimated blood loss in 12 participants across trial 1, 2, and 3. No significant improvement in trial 1 vs. trial 2 (p=`r figure_legend_data$fig2c$p_value_t1_t2`). Significant improvement in trial 1 vs. trial 3 (p=`r figure_legend_data$fig2c$p_value_t1_t3`).
+
+```{r}
+figure2 <- ggpubr::ggarrange(
+  coaching_success_rate, coaching_tth_overall_plot, coaching_ebl_overall_plot, 
+  nrow=1, labels=c("a", "b", "c"), widths = c(1, 1,1)
+)
+
+ggsave(figure2, width = 10, height = 5, units = 'in', filename = paste0(plot_dir, '/coaching_figure.pdf'), device = 'pdf')
+```
+
+```{r, include=T}
+figure2
+```
+
+## Figure 3. Training rescues
+
+(a) Change in TTH between trial 1 and trial 2 in participants considered training successes (failed trial 1, passed trial 2). By definition, failure in trial 1 means a TTH of 300 seconds.
+(b) Change in EBL between trial 1 and trial 2 in training successes.
+<!-- (c) TTH between trial 1 and trial 2 in training successes. Participants are organized by improvement in TTH. -->
+<!-- (d) EBL between trial 1 and trial 2 in training successes. Participants are ordered on the x-axis as in (c) -->
+(c) % Improvement in TTH and EBL in trial 1 and trial 2 in training rescues. Participants are orded by improvement in TTH.
+
+```{r}
+figure3_top <- ggpubr::ggarrange(
+  most_improved_tth, most_improved_ebl, 
+  nrow=1, labels=c("a", "b"), widths = c(1,1)
+)
+
+figure3_bottom <- ggpubr::ggarrange(
+  tth_line_most_improved_t1_vs_t2, ebl_line_most_improved_t1_vs_t2, widths = c(1,1), labels = c("c", "d")
+  # common.legend = T, legend='right' 
+)
+
+figure3_bottom <- ggpubr::ggarrange(
+  combined_line_most_improved_percent, labels=c('c')
+)
+
+figure3 <- annotate_figure(ggpubr::ggarrange(
+  figure3_top, figure3_bottom, heights = c(1,1.5), nrow = 2
+), bottom = text_grob('Individual ranked by improvement in TTH'))
+
+ggsave(figure3, width = 10, height = 8, units = 'in', filename = paste0(plot_dir, '/trial_rescues.pdf'), device = 'pdf')
+```
+
+```{r include=TRUE, fig.height=8}
+figure3
+```
+
+## Figure 4. Participant Heart Rate
+
+```{r}
+figure4 <- annotate_figure(
+  ggpubr::ggarrange(
+    heart_rate_average_plot, heart_rate_peak_plot, widths=c(1,1), labels=c("a", "b")
+  ), left = text_grob('Beats per minute (BPM)', size = 12, rot = 90)
+)
+
+ggsave(figure4, width = 10, height = 5, units = 'in', filename = paste0(plot_dir, '/heart_rate.pdf'), device = 'pdf')
+```
+
+```{r include=TRUE, fig.height=8}
+figure4
+```
