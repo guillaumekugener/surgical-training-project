@@ -41,6 +41,8 @@ if not os.path.isdir(output_directory_for_rescaled_image):
 # Iterate through all of the images and process them
 frame_counter = 0
 for frame in all_frames:
+	if frame == '.DS_Store':
+		continue
 	if frame_counter % 1000 == 0:
 		print('Processed: ' + str(frame_counter) + '/' + str(len(all_frames)) + ' (' + str(ceil(time.time()-start_time)) + ')')
 	frame_counter += 1
