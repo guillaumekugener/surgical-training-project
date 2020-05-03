@@ -5,6 +5,7 @@ library(ggrepel)
 library(magrittr)
 library(reshape2)
 library(ggpubr)
+library(ggforce)
 library(ggsci)
 library(data.table)
 library(DT)
@@ -46,7 +47,7 @@ emory_processed <- read_tsv(emory_data) %>%
   dplyr::select(
     SurveyID,
     OtherSpec=Speciality,
-    Totyears=Year,
+    Totyears,
     `Trial 1 TTH`=`tiral 1 in second`, 
     `trial 1 ebl`=`Trial 1 EBL`,
     `Trial 1 Success`,
