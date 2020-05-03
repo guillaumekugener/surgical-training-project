@@ -1,0 +1,315 @@
+---
+title: "Figure 3"
+author: "Guillaume Kugener"
+date: "5/2/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+source('~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/carotid_model/preprocess_data.R')
+```
+
+```{r}
+# Look at success rate across sites
+compare_sites_data <- raw_data %>% 
+  mutate(dd=format(as.Date(`Start Date`), format='%Y-%m')) %>%
+  mutate(SiteGroup=ifelse(is.na(dd), Source, paste0(Source, '_', dd))) %>%
+  mutate(SiteGroup2=case_when(
+    Source == 'Emory' ~ 'Emory',
+    grepl('[0-9][0-9]$', SurveyID) ~ paste0('USC', gsub('[0-9][0-9]$', '', SurveyID)),
+    SurveyID %in% c('314c', '320b') ~ 'USC3', 
+    TRUE ~ 'None'
+  )) %>% 
+  mutate(SiteGroup2=gsub('USCUSC1', 'USC120+', SiteGroup2))
+```
+
+```{r}
+trial_success_by_site <- compare_sites_data %>%
+  mutate(T1S=case_when(
+      `Trial 1 Success`==0 ~ 'Fail', 
+      `Trial 1 Success`==1 ~ 'Success',
+      TRUE ~ 'None'),
+    T2S=case_when(
+      `Trial 2 Success`==0 ~ 'Fail', 
+      `Trial 2 Success`==1 ~ 'Success',
+      TRUE ~ 'None')
+  ) %>%
+  dplyr::select(SurveyID, Group, Source, SiteGroup2, T1S, T2S) %>%
+  gather(trial, value, -SurveyID, -Group, -Source, -SiteGroup2) %>%
+  filter(value != 'None') %>%
+  group_by(SiteGroup2, trial, value) %>%
+  dplyr::summarise(count=n()) %>%
+  group_by(SiteGroup2, trial) %>%
+  mutate(total=sum(count))
+
+# Add p values between all groups
+# Need to do a fishers between all of them
+fisher_sites_ps <- NULL
+for (si in unique(trial_success_by_site$SiteGroup2)) {
+  contig_table_sites <- trial_success_by_site %>% 
+    filter(SiteGroup2 == si) %>%
+    reshape2::dcast(trial ~ value, value.var='count') %>%
+    column_to_rownames(var = 'trial')
+  contig_table_sites[is.na(contig_table_sites)] <- 0
+  fisher_sites_ps %<>% rbind(data.frame(SiteGroup2=si, p=fisher.test(contig_table_sites)$p.value, stringsAsFactors = F))
+}
+
+fisher_sites_ps %<>% 
+  mutate(p_text=ifelse(p < 0.05, paste0('p=', round(p, 3)), 'ns')) %>% 
+  mutate(trial=NA) %>%
+  mutate(p_text=ifelse(p < 0.001, 'p < 0.001', p_text))
+
+success_rate_with_ps <- ggplot(trial_success_by_site %>% filter(value=='Success'), aes(SiteGroup2, count/total*100, fill=trial)) +
+  geom_bar(stat = 'identity', position = position_dodge()) +
+  geom_text(data = fisher_sites_ps %>% mutate(y=105), aes(SiteGroup2, y, label = p_text)) +
+  ylab('Success rate') +
+  xlab('Site')
+
+success_rate_with_ps
+```
+
+```{r}
+success_counts_with_ps <- ggplot(trial_success_by_site %>% 
+    ungroup() %>%
+    filter(value=='Success') %>% 
+    mutate(trial=paste0('Trial ', gsub('[TS]', '', trial))), 
+  aes(SiteGroup2, count, fill=trial)) +
+  # geom_bar(aes(SiteGroup2, total), stat = 'identity', position = position_dodge(), color='grey', alpha=0.5) +
+  guides(fill=guide_legend(title=NULL)) +
+  geom_bar(stat = 'identity', position = position_dodge()) +
+  geom_text(data = fisher_sites_ps %>% mutate(y=max(trial_success_by_site$count)*1.1), aes(SiteGroup2, y, label = p_text), size=12/ggplot2:::.pt) +
+  ylab('Number successful trials') +
+  xlab('Site') +
+  scale_fill_jama() +
+  scale_y_continuous(expand=c(0, 0), limits=c(0, max(trial_success_by_site$count)*1.15)) +
+  theme_bw() +
+  theme(
+    legend.position = 'top',
+    legend.justification = 'left',
+    legend.text = element_text(size=12),
+    axis.text = element_text(size=12),
+    axis.title = element_text(size = 12)
+  )
+
+success_counts_with_ps
+```
+
+```{r}
+trial_tth_by_site <- compare_sites_data %>%
+  mutate(T1S=case_when(
+      `Trial 1 Success`==0 ~ 'Fail', 
+      `Trial 1 Success`==1 ~ 'Success',
+      TRUE ~ 'None'),
+    T2S=case_when(
+      `Trial 2 Success`==0 ~ 'Fail', 
+      `Trial 2 Success`==1 ~ 'Success',
+      TRUE ~ 'None')
+  ) %>%
+  dplyr::select(SurveyID, Group, Source, SiteGroup2, `Trial 1 TTH`, `Trial 2 TTH`) %>%
+  filter(!is.na( `Trial 2 TTH`)) %>%
+  gather(trial, value, -SurveyID, -Group, -Source, -SiteGroup2)
+
+tth_by_site_final <- ggplot(trial_tth_by_site, aes(SiteGroup2, value, color=trial)) +
+  geom_boxplot(outlier.shape=NA) +
+  geom_point(position = position_jitterdodge(jitter.width = 0.3), alpha=0.75) +
+  guides(color=guide_legend(title=NULL, override.aes = list(label=''))) +
+  stat_compare_means(aes(group = trial), label = "p.signif", paired = T, label.y = 300*1.1) +
+  scale_color_jama() +
+  ylab('Time to Hemostasis (sec)') +
+  xlab('Site') +
+  scale_y_continuous(limits=c(min(trial_tth_by_site$value)*0.95, max(trial_tth_by_site$value*1.15))) +
+  theme_bw() +
+  theme(
+    legend.position = 'top',
+    legend.justification = 'left',
+    legend.text = element_text(size=12),
+    axis.text = element_text(size=12),
+    axis.title = element_text(size = 12)
+  )
+
+tth_by_site_final
+```
+
+```{r}
+fig3_r1 <- ggpubr::ggarrange(
+  success_counts_with_ps, tth_by_site_final,
+  labels = c('a', 'b'), ncol = 2
+)
+```
+
+```{r}
+coaching_data <- complete_data %>% filter(!is.na(`Trial 3 Start Time (hhmmss)`))
+```
+
+```{r include=FALSE}
+coaching_tth_data <- coaching_data %>%
+  dplyr::select(SurveyID, Group, tth_columns) %>%
+  gather(var, value, -SurveyID, -Group) %>%
+  mutate(trial = gsub(' TTH', '', var)) %>%
+  mutate(trial=factor(trial, c('Trial 1', 'Trial 2', 'Trial 3')))
+
+tth_coaching_p_values_t1_t2 <- coaching_data %>%
+  dplyr::select(SurveyID, Group, tth_columns) %>%
+  gather(var, value, -SurveyID, -Group) %>%
+  mutate(trial = gsub(' TTH', '', var)) %>%
+  filter(trial %in% paste0('Trial ', c(1,2,3))) %>%
+  reshape2::dcast(SurveyID + Group ~ trial, value.var='value') %>%
+  dplyr::summarise(
+    t1_t2_p = t.test(`Trial 1`, `Trial 2`)$p.value,
+    t1_t2_conf_min = t.test(`Trial 1`, `Trial 2`)$conf.int[1],
+    t1_t2_conf_max = t.test(`Trial 1`, `Trial 2`)$conf.int[2],
+    t1_t3_p = t.test(`Trial 1`, `Trial 3`)$p.value,
+    t1_t3_conf_min = t.test(`Trial 1`, `Trial 3`)$conf.int[1],
+    t1_t3_conf_max = t.test(`Trial 1`, `Trial 3`)$conf.int[2],
+    t2_t3_p = t.test(`Trial 2`, `Trial 3`)$p.value,
+    t2_t3_conf_min = t.test(`Trial 2`, `Trial 3`)$conf.int[1],
+    t2_t3_conf_max = t.test(`Trial 2`, `Trial 3`)$conf.int[2]
+  )
+
+coaching_mean_tth <- coaching_tth_data %>%
+  group_by(trial, Group) %>%
+  dplyr::summarise(m=mean(value, na.rm = T))
+```
+
+```{r}
+coaching_comparisons <- list( c('Trial 1', 'Trial 2'), c('Trial 2', 'Trial 3'), c('Trial 1', 'Trial 3'))
+new_coaching_tth_overall_plot <- ggplot(coaching_tth_data, aes(trial, value, fill=trial)) +
+  stat_summary(fun.y = mean, geom = 'bar', color='black', na.rm=T) +
+  stat_summary(fun.data=mean_se, geom = 'errorbar', color='black',width=0.2) +
+  stat_compare_means(aes(group=trial), 
+    comparisons = coaching_comparisons,
+    label.y = c(285, 255, 310),
+    method = 't.test', paired = F, label = 'p.format') +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 330)) +
+  scale_fill_jama() +
+  xlab('Trial Number') +
+  ylab('Time to Hemostasis') +
+  theme_bw() +
+  theme(
+    text = element_text(size = 12),
+    axis.text = element_text(size=12),
+    axis.title.y = element_text(size=12),
+    axis.title.x = element_blank(),
+    panel.grid.major.x = element_blank(),
+    legend.position = 'none',
+    strip.text = element_text(size = 12)
+  )
+
+new_coaching_tth_overall_plot
+```
+
+```{r eval=FALSE}
+coaching_tth_data_bar <- coaching_tth_data %>%
+  group_by(trial) %>%
+  dplyr::summarise(m=mean(value, na.rm = T), s=sd(value, na.rm = T)/sqrt(length(value[!is.na(value)])))
+
+# Create the p values data
+coaching_tth_overall_p_value_text <- data.frame(
+  base=c('Trial 1', 'Trial 1', 'Trial 2'),
+  group=c('Trial 2', 'Trial 3', 'Trial 3'),
+  p=c(tth_coaching_p_values_t1_t2[1,'t1_t2_p'], tth_coaching_p_values_t1_t2[1,'t1_t3_p'], tth_coaching_p_values_t1_t2[1,'t2_t3_p']),
+  m=c(280+5, 300+5, 250+5),
+  x=c(1.5, 2, 2.5),
+  stringsAsFactors = F
+) %>% mutate(
+  trial=NA,
+  label = ifelse(p < 0.001, 'p < 0.001', paste0('p = ', round(p, 3)))
+)
+
+coaching_tth_overall_plot <- ggplot(coaching_tth_data_bar, aes(trial, m, fill=trial)) +
+  geom_bar(stat = 'identity', color='black') +
+  geom_errorbar(aes(ymin=m-s, ymax=m+s), width = 0.2) +
+  geom_text(data=coaching_tth_overall_p_value_text, aes(x, m, label=label), size=12/ggplot2:::.pt) +
+  scale_fill_jama() +
+  annotate("segment", x=1, xend=2, y=280-5, yend=280-5, color='black') +
+  annotate("segment", x=1, xend=1, y=280-5, yend=280-10, color='black') +
+  annotate("segment", x=2, xend=2, y=280-5, yend=280-10, color='black') +
+  
+  annotate("segment", x=1, xend=3, y=300-5, yend=300-5, color='black') +
+  annotate("segment", x=1, xend=1, y=300-5, yend=300-10, color='black') +
+  annotate("segment", x=3, xend=3, y=300-5, yend=300-10, color='black') +
+  
+  annotate("segment", x=2, xend=3, y=250-5, yend=250-5, color='black') +
+  annotate("segment", x=2, xend=2, y=250-5, yend=250-10, color='black') +
+  annotate("segment", x=3, xend=3, y=250-5, yend=250-10, color='black') +
+  # annotate(geom = 'text', x = 3, y = 320*300/310, label = '*', size = 12/ggplot2:::.pt) +
+  # geom_point(position = position_jitter(width = 0.25)) +
+  # stat_summary(fun.y = 'mean', geom = 'line', color='black') +
+  # scale_fill_jama() +
+  scale_y_continuous(limits = c(0,320), expand = c(0,0)) +
+  # facet_wrap(~Group) +
+  xlab('Trial Number') +
+  ylab('Time to Hemostasis') +
+  theme_bw() +
+  theme(
+    text = element_text(size = 12),
+    axis.text = element_text(size=12),
+    axis.title.y = element_text(size=12),
+    axis.title.x = element_blank(),
+    panel.grid.major.x = element_blank(),
+    legend.position = 'none',
+    strip.text = element_text(size = 12)
+  )
+
+coaching_tth_overall_plot
+```
+
+```{r}
+a1_t2_data <- raw_data %>%
+  dplyr::select(
+    SurveyID, Group, Source, 
+     `Trial 1 Success`, `Trial 2 Success`,
+    `Trial 1 TTH`, `Trial 2 TTH`,
+    `trial 1 ebl`, `trial 2 ebl`
+  ) %>%
+  gather(var, value, -SurveyID, -Group, -Source) %>%
+  mutate(
+    trial=as.numeric(stringr::str_extract(pattern='[0-9]+', string=var)),
+    variable = stringr::str_extract(pattern='ebl|TTH|Success', string=var)
+  ) %>%
+  filter((Group=='Trainee' & trial == 2) | (Group == 'Attending' & trial == 1)) %>%
+  reshape2::dcast(SurveyID + Group + Source + trial ~ variable, value.var='value')
+```
+
+```{r}
+## Trainees are better in trial 2 than attendings in trial 1 when using TTH as mesaurement. No significant change when using EBL
+t.test(
+  a1_t2_data %>% filter(Group=='Trainee') %$% TTH,
+  a1_t2_data %>% filter(Group=='Attending') %$% TTH,
+  paired = F
+)
+
+tth_a1_t2_plot <- ggplot(a1_t2_data %>% mutate(Group2=paste0(Group, 's Trial ', trial)), aes(Group2, TTH, fill=Group2)) +
+  geom_boxplot(color='black', alpha=0.5, fill='grey') +
+  geom_point(position=position_jitterdodge(jitter.width = 0.3)) +
+  ylab('Time to Hemostasis (sec)') +
+  theme_bw() +
+  theme(
+    axis.text = element_text(size=12),
+    axis.title = element_text(size = 12),
+    axis.title.x = element_blank(),
+    legend.position = 'none'
+  )
+
+tth_a1_t2_plot
+```
+
+```{r}
+fig3_r2 <- ggpubr::ggarrange(
+  coaching_tth_overall_plot, tth_a1_t2_plot, labels=c('c', 'd'), ncol = 2
+)
+```
+
+```{r}
+figure3 <- ggpubr::ggarrange(
+  success_counts_with_ps, tth_by_site_final,
+  fig3_r2, nrow=3, labels = c('a', 'b', '')
+)
+
+ggsave(figure3, filename = file.path(source_dir, 'figures', 'figure3.png'), width = 8, height = 10, units = 'in')
+```
+
+
+
+

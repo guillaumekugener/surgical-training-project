@@ -1,0 +1,361 @@
+---
+title: "Figure 4"
+author: "Guillaume Kugener"
+date: "5/3/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+source('~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/carotid_model/preprocess_data.R')
+```
+
+```{r}
+confidence_value_order <- c(
+  'Training level'='GroupTrainee',
+  'General confidence pre-trial'='generalconfidencepre', 'General confidence post-trial'='generalconfidencepost', 
+  'Carotid confidence pre-trial'='carotidconfidencepre', 'Carotid confidence post-trial'='carotidconfidencepost', 
+  'Specialty'='SpecialtyOtolaryngology',
+  'Prior real ICA'='priorreal', 'Prior simulation'='priorsim',
+  'Total years in training'='Totyears', 'Years as attending'='Attyears', 
+  'Endoscopic last 12 months'='endolast12mo', 'Cadaver last 12 months'='cadaverlast12'
+)
+
+# logistic regression - what predicts trial 1 success from a set of variables that we have
+pred_logisit_data <- raw_data %>%
+  dplyr::select(
+    SurveyID, Group, Source,
+    `Trial 1 Success`, `Trial 2 Success`,
+    `Trial 1 TTH`, `Trial 2 TTH`, `trial 1 ebl`, `trial 2 ebl`,
+    generalconfidencepre, generalconfidencepost,
+    carotidconfidencepre, carotidconfidencepost,
+    priorreal, priorsim,
+    Attyears, endolast12mo, cadaverlast12
+  ) %>% mutate(Group=factor(Group)) %>%
+  mutate(Attyears=ifelse(Group=='Trainee', 0, Attyears))
+```
+
+## Demos vs. performance (success, TTH, EBL)
+
+```{r}
+demographics_pred_logisit_data <- raw_data %>%
+  dplyr::select(
+    SurveyID, Group, Source,
+    `Trial 1 Success`, `Trial 2 Success`,
+    `Trial 1 TTH`, `Trial 2 TTH`, `trial 1 ebl`, `trial 2 ebl`,
+    Specialty,
+    priorreal, priorsim,
+    Totyears, Attyears, endolast12mo, cadaverlast12,
+    generalconfidencepre, carotidconfidencepre, carotidconfidencepost, generalconfidencepost
+  ) %>% mutate(Group=factor(Group)) %>%
+  mutate(Attyears=ifelse(Group=='Trainee', 0, Attyears))
+```
+
+```{r}
+dems_t1s_pred <- glm(`Trial 1 Success` ~ Attyears + Specialty + priorsim + priorreal + endolast12mo + cadaverlast12 + generalconfidencepre + carotidconfidencepre, data=demographics_pred_logisit_data, family = 'binomial')
+dems_t2s_pred <- glm(`Trial 2 Success` ~ Attyears + Specialty + priorsim + priorreal + endolast12mo + cadaverlast12 + generalconfidencepre + carotidconfidencepre, data=demographics_pred_logisit_data, family = 'binomial')
+
+# Train logistic regression
+dems_results_logit_data <- data.frame(
+  coeff_names=names(coefficients(dems_t1s_pred)),
+  T1_c=coefficients(dems_t1s_pred),
+  T1_p=coef(summary(dems_t1s_pred))[,4],
+  T2_c=coefficients(dems_t2s_pred),
+  T2_p=coef(summary(dems_t2s_pred))[,4],
+  stringsAsFactors = F
+) %>%
+  gather(var, value, -coeff_names) %>%
+  mutate(
+    trial = stringr::str_extract(string=var, pattern='^T[12]'),
+    variable = stringr::str_extract(string=var, pattern='[cp]$')
+  ) %>% reshape2::dcast(coeff_names + trial ~ variable, value.var='value') %>%
+  filter(coeff_names != '(Intercept)') %>%
+  mutate(coeff_names=factor(coeff_names, levels=c(confidence_value_order))) %>%
+  mutate(trial=gsub('^T', 'Trial ', trial))
+```
+
+```{r}
+# Confidence + group predictions
+t1s_pred <- glm(`Trial 1 Success` ~ generalconfidencepre + generalconfidencepost + carotidconfidencepre + carotidconfidencepost, data=pred_logisit_data, family = 'binomial')
+t2s_pred <- glm(`Trial 2 Success` ~ generalconfidencepre + generalconfidencepost + carotidconfidencepre + carotidconfidencepost, data=pred_logisit_data, family = 'binomial')
+
+# Train logistic regression
+results_logit_data <- data.frame(
+  coeff_names=names(coefficients(t1s_pred)),
+  T1_c=coefficients(t1s_pred),
+  T1_p=coef(summary(t1s_pred))[,4],
+  T2_c=coefficients(t2s_pred),
+  T2_p=coef(summary(t2s_pred))[,4],
+  stringsAsFactors = F
+) %>%
+  gather(var, value, -coeff_names) %>%
+  mutate(
+    trial = stringr::str_extract(string=var, pattern='^T[12]'),
+    variable = stringr::str_extract(string=var, pattern='[cp]$')
+  ) %>% reshape2::dcast(coeff_names + trial ~ variable, value.var='value') %>%
+  filter(coeff_names != '(Intercept)') %>%
+  mutate(coeff_names=factor(coeff_names, levels=c(confidence_value_order))) %>%
+  mutate(trial=gsub('^T', 'Trial ', trial))
+```
+
+```{r}
+max_variable_value_across_logits_trials <- max(abs(dems_results_logit_data$c), abs(results_logit_data$c))
+```
+
+
+```{r}
+breaks_dems_trial_success_conf_multi <- confidence_value_order[which(confidence_value_order %in% dems_results_logit_data$coeff_names)]
+
+dems_trial_success_conf_multi <- ggplot(dems_results_logit_data, aes(coeff_names, abs(c), fill=trial)) +
+  geom_bar(stat='identity', position=position_dodge()) + 
+  geom_text(data = dems_results_logit_data %>%
+      mutate(text=ifelse(p < 0.05, paste0('p=', round(p, 2)), 'ns'), y=max(abs(max_variable_value_across_logits_trials))*1.1),
+    aes(coeff_names, y, label=text, color=trial), size=12/ggplot2:::.pt, position = position_dodge(width=1)) +
+  guides(fill=guide_legend(title=NULL), color=FALSE) +
+  scale_fill_jama() +
+  scale_color_jama() +
+  xlab('Variable') + ylab('Model weight') +
+  scale_x_discrete(breaks=breaks_dems_trial_success_conf_multi, labels=names(breaks_dems_trial_success_conf_multi)) +
+  # ggtitle('Multivariate prediction of trial success') +
+  theme_bw() +
+  theme(
+    legend.position = 'top',
+    legend.justification = 'left',
+    legend.text = element_text(size=12),
+    axis.text = element_text(size=12),
+    axis.title = element_text(size=12),
+    axis.title.x = element_blank()
+  )
+
+dems_trial_success_conf_multi
+```
+
+
+```{r}
+conf_breaks_trial_sucess_conf_multi <- confidence_value_order[which(confidence_value_order %in% results_logit_data$coeff_names)]
+trial_success_conf_multi <- ggplot(results_logit_data, aes(coeff_names, abs(c), fill=trial)) +
+  geom_bar(stat='identity', position=position_dodge()) + 
+  geom_text(data = results_logit_data %>%
+      mutate(text=ifelse(p < 0.05, paste0('p=', round(p, 2)), 'ns'), y=max(max_variable_value_across_logits_trials)*1.1),
+    aes(coeff_names, y, label=text, color=trial), size=12/ggplot2:::.pt, position = position_dodge(width=1)) +
+  guides(fill=guide_legend(title=NULL), color=FALSE) +
+  scale_fill_jama() +
+  scale_color_jama() +
+  # ggtitle('Multivariate prediction of trial success') +
+  guides(fill=guide_legend(title=NULL)) +
+  xlab('Variable') + ylab('Model weight') +
+  scale_x_discrete(breaks=conf_breaks_trial_sucess_conf_multi, labels=names(conf_breaks_trial_sucess_conf_multi)) +
+  # ggtitle('Multivariate prediction of trial success') +
+  theme_bw() +
+  theme(
+    legend.position = 'top',
+    legend.justification = 'left',
+    legend.text = element_text(size=12),
+    axis.text = element_text(size=12),
+    axis.title = element_text(size=12),
+    axis.title.x = element_blank()
+  )
+
+trial_success_conf_multi
+```
+
+```{r}
+tth_t1s_pred <- lm(`Trial 1 TTH` ~ generalconfidencepre + generalconfidencepost + carotidconfidencepre + carotidconfidencepost, data=pred_logisit_data)
+tth_t2s_pred <- lm(`Trial 2 TTH` ~ generalconfidencepre + generalconfidencepost + carotidconfidencepre + carotidconfidencepost, data=pred_logisit_data)
+
+# Train logistic regression
+tth_results_lm_data <- data.frame(
+  coeff_names=names(coefficients(tth_t1s_pred)),
+  T1_c=coefficients(tth_t1s_pred),
+  T1_p=coef(summary(tth_t1s_pred))[,4],
+  T2_c=coefficients(tth_t2s_pred),
+  T2_p=coef(summary(tth_t2s_pred))[,4],
+  stringsAsFactors = F
+) %>%
+  gather(var, value, -coeff_names) %>%
+  mutate(
+    trial = stringr::str_extract(string=var, pattern='^T[12]'),
+    variable = stringr::str_extract(string=var, pattern='[cp]$')
+  ) %>% reshape2::dcast(coeff_names + trial ~ variable, value.var='value') %>%
+  filter(coeff_names != '(Intercept)') %>%
+  mutate(coeff_names=factor(coeff_names, levels=c(confidence_value_order))) %>%
+  mutate(trial=gsub('^T', 'Trial ', trial))
+
+tth_success_conf_multi <- ggplot(tth_results_lm_data, aes(coeff_names, abs(c), fill=trial)) +
+  geom_bar(stat='identity', position=position_dodge()) + 
+  geom_text(data = tth_results_lm_data %>%
+      mutate(text=ifelse(p < 0.05, paste0('p=', round(p, 2)), 'ns'), y=max(abs(tth_results_lm_data$c))*1.1),
+    aes(coeff_names, y, label=text, color=trial), size=12/ggplot2:::.pt, position = position_dodge(width=1)) +
+  guides(fill=guide_legend(title=NULL), color=FALSE) +
+  scale_fill_jama() +
+  scale_color_jama() +
+  # ggtitle('Multivariate prediction of TTH') +
+  guides(fill=guide_legend(title=NULL)) +
+  xlab('Variable') + ylab('Model weight') +
+  scale_x_discrete(breaks=conf_breaks_trial_sucess_conf_multi, labels=names(conf_breaks_trial_sucess_conf_multi)) +
+  # ggtitle('Multivariate prediction of trial success') +
+  theme_bw() +
+  theme(
+    legend.position = 'top',
+    legend.justification = 'left',
+    legend.text = element_text(size=12),
+    axis.text = element_text(size=12),
+    axis.title = element_text(size=12),
+    axis.title.x = element_blank()
+  )
+tth_success_conf_multi
+```
+
+```{r include=FALSE}
+heart_rate_columns <- raw_data %>% colnames() %>% .[grep('Peak|Average', .)]
+heart_rate_data <- raw_data %>%
+  dplyr::select(SurveyID, Group, heart_rate_columns) %>%
+  gather(var, value, -SurveyID, -Group) %>%
+  mutate(
+    timing=stringr::str_extract(pattern='Base?line|Trial [12]|Intertrial|Posttrial', var),
+    value_type = stringr::str_extract(pattern='Peak|Average', var)
+  ) %>%
+  mutate(timing=gsub('Basline', 'Baseline', timing)) %>%
+  mutate(timing=factor(timing, c('Baseline', 'Trial 1', 'Intertrial', 'Trial 2', 'Posttrial')))
+
+# To look for those that have complete data
+counts_by_individual <- heart_rate_data %>%
+  filter(value_type=='Peak') %>%
+  group_by(SurveyID) %>%
+  dplyr::summarise(count=length(which(!is.na(value)))) %>%
+  arrange(-count)
+
+complete_heart_rate_data <- heart_rate_data %>%
+  filter(SurveyID %in% (counts_by_individual %>% filter(count > 2) %$% SurveyID))
+
+clean_heart_rate_data <- complete_heart_rate_data %>%
+  dcast(SurveyID + Group + value_type ~ timing, value.var='value') %>%
+  filter(!is.na(Baseline), !is.na(`Trial 1`)) %>%
+  mutate(
+    PT1=`Trial 1`/Baseline, 
+    PIT=Intertrial/Baseline, 
+    PT2=`Trial 2`/Baseline, 
+    PPT=Posttrial/Baseline
+  )
+```
+
+```{r}
+base_line_t1_peak_avg <- clean_heart_rate_data %>%
+  filter(value_type=='Average') %$%
+  t.test(`Trial 1`, Baseline, paired = T)
+
+base_line_t2_peak_avg <- clean_heart_rate_data %>%
+  filter(value_type=='Average') %$%
+  t.test(`Trial 2`, Baseline, paired = T)
+
+number_tachycardic <- complete_heart_rate_data %>%
+  group_by(value_type, timing) %>%
+  dplyr::summarise(
+    num_tachy=length(value[value > 100]), 
+    percent_tachy=length(value[value > 100])/n(),
+    num_extreme_tachy=length(value[value > 120]), 
+    percent_extreme_tachy=length(value[value > 120])/n(),
+    total=n()
+  )
+
+contig_table_values <- number_tachycardic %>%
+  filter(timing %in% c('Baseline', 'Trial 1', 'Intertrial', 'Trial 2', 'Posttrial')) %>%
+  mutate(num_not_tachy=total-num_tachy, num_not_e_tachy=total-num_extreme_tachy) %>%
+  dplyr::select(value_type, timing, num_tachy, num_not_tachy, num_extreme_tachy, num_not_e_tachy)
+
+tachy_table <- contig_table_values %>%
+  ungroup() %>%
+  filter(value_type=='Peak', timing %in% c('Baseline', 'Trial 1')) %>%
+  dplyr::select(timing, num_tachy, num_not_tachy) %>%
+  column_to_rownames('timing') %>%
+  fisher.test()
+
+extreme_tachy_table <- contig_table_values %>%
+  ungroup() %>%
+  filter(value_type=='Peak', timing %in% c('Baseline', 'Trial 1')) %>%
+  dplyr::select(timing, num_extreme_tachy, num_not_e_tachy) %>%
+  column_to_rownames('timing') %>%
+  fisher.test()
+
+significance_hr <- NULL
+for (i in c('Trial 1', 'Intertrial', 'Trial 2', 'Posttrial')) {
+  for (j in c('Average', 'Peak')) {
+    for (k in c('Baseline', 'Intertrial')) {
+      da <- clean_heart_rate_data %>%
+        filter(value_type==j)
+      p_val <- t.test(da[,i], da[,k])$p.value
+      
+      significance_hr %<>% rbind(data.frame(base=k, timing=i, value_type=j, p=p_val)) 
+    }
+  }
+}
+
+significance_hr %<>% 
+  mutate(timing=factor(timing, levels=c('Baseline', 'Trial 1', 'Intertrial', 'Trial 2', 'Posttrial'))) %>%
+  mutate(label=ifelse(p < 0.05, '*', 'ns'))
+```
+
+```{r}
+# Simple box plot of heart rate data
+heart_rate_data_bar <- complete_heart_rate_data %>%
+  group_by(timing, value_type) %>%
+  dplyr::summarise(m=mean(value, na.rm = T), s=sd(value, na.rm = T)/sqrt(length(value[!is.na(value)]))) %>%
+  ungroup() %>%
+  mutate(timing=factor(timing, levels=c('Baseline', 'Trial 1', 'Intertrial', 'Trial 2', 'Posttrial')))
+```
+
+```{r}
+my_comparisons <- list( c("Baseline", "Trial 1"), c("Baseline", "Intertrial"), c("Intertrial", "Trial 2") )
+jama_colors <- pal_jama("default")(7)
+
+ggplot(complete_heart_rate_data %>% filter(value_type=='Average'), aes(timing, value, color=timing)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_sina(alpha=0.5) +
+  geom_path(data=heart_rate_data_bar %>% filter(value_type == 'Average'), aes(timing, m, group=value_type), size=1.5, color='black') +
+  stat_compare_means(comparisons = my_comparisons, method = 't.test', paired = T, label = 'p.format') +
+  scale_color_manual(values=c('Baseline'='grey', 'Trial 1'=jama_colors[1], 'Intertrial'='grey', 'Trial 2'=jama_colors[2], 'Posttrial'='grey')) +
+  theme_bw() +
+  theme(
+    legend.position = 'none'
+  )
+```
+
+```{r}
+ggplot(complete_heart_rate_data %>% filter(value_type=='Average'), aes(timing, value, color=timing, fill=t)) +
+  # geom_boxplot(outlier.shape = NA) +
+  stat_summary(fun.y = mean, geom = 'bar', na.rm = T) +
+  geom_sina(alpha=0.5) +
+  geom_path(data=heart_rate_data_bar %>% filter(value_type == 'Average'), aes(timing, m, group=value_type), size=1.5, color='black') +
+  stat_compare_means(comparisons = my_comparisons, method = 't.test', paired = T, label = 'p.format') +
+  scale_color_manual(values=c('Baseline'='grey', 'Trial 1'=jama_colors[1], 'Intertrial'='grey', 'Trial 2'=jama_colors[2], 'Posttrial'='grey')) +
+  theme_bw() +
+  theme(
+    legend.position = 'none'
+  )
+```
+
+```{r}
+heart_rate_average_plot <- ggplot(heart_rate_data_bar %>% filter(value_type=='Average'), aes(timing, m)) +
+  geom_bar(stat = 'identity', color = 'black', alpha=0.5, fill='grey') +
+  geom_errorbar(aes(ymin=m-s, ymax=m+s), width = 0.2) +
+  # geom_text(data = significance_hr %>% filter(value_type=='Average') %>% mutate(m=110), aes(timing, m, label=label), size=12/ggplot2:::.pt) +
+  # geom_point(position = position_jitter(width = 0.25)) +
+  # scale_fill_jama() +
+  coord_cartesian(ylim = c(80,110)) +
+  # facet_wrap(~Group) +
+  xlab('') +
+  ylab('') +
+  ggtitle('Average participant heart rate') +
+  theme_bw() +
+  theme(
+    text = element_text(size = 12),
+    axis.text = element_text(size=12),
+    # axis.title = element_text(size=12),
+    axis.title.x = element_blank(),
+    panel.grid.major.x = element_blank(),
+    legend.position = 'none',
+    strip.text = element_text(size = 12)
+  )
+
+heart_rate_average_plot
+```

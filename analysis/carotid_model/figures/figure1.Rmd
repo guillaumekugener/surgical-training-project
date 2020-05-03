@@ -1,0 +1,292 @@
+---
+title: "Figure 1"
+author: "Guillaume Kugener"
+date: "5/2/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(gridExtra)
+library(grid)
+library(MASS)
+source('~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/carotid_model/preprocess_data.R')
+```
+
+```{r}
+scatter_ebl_tth <- raw_data %>% 
+  dplyr::select(SurveyID, Group, `Trial 1 TTH`, `Trial 2 TTH`, `trial 1 ebl`, `trial 2 ebl`) %>%
+  gather(var, value, -SurveyID, -Group) %>%
+  mutate(variable = gsub('.* ', '', var)) %>%
+  mutate(trial = stringr::str_extract(string=var, pattern='[0-9]+')) %>%
+  reshape2::dcast(SurveyID + Group + trial ~ variable, value.var='value')
+
+change_in_scores <- scatter_ebl_tth %>% 
+  setDT() %>% 
+  dcast(SurveyID + Group ~ trial, value.var=c('ebl', 'TTH')) %>%
+  mutate(change_in_tth=TTH_1 - TTH_2, change_in_ebl = ebl_1 - ebl_2)
+
+ordered_survey_id <- change_in_scores %>%
+  arrange(change_in_tth) %$%
+  SurveyID
+
+change_in_scores %<>% mutate(SurveyID = factor(SurveyID, levels=ordered_survey_id))
+change_in_scores %<>% mutate(MI=ifelse(SurveyID %in% most_improved_data$SurveyID, 'Training Rescue', NA))
+```
+
+```{r}
+m <- ggplot(geyser, aes(x = duration, y = waiting)) + geom_point() + xlim(0.5, 6) + ylim(40, 110) 
+m + geom_density2d()
+
+dens <- kde2d(geyser$duration , geyser$waiting, n = 50, lims = c(0.5, 6, 40, 110)) 
+densdf <- data.frame(expand.grid(duration = dens$x , waiting = dens$y), z = as.vector(dens$z))
+
+m + geom_contour(aes(z=z), data=densdf)
+m + geom_density2d() + scale_y_log10() 
+m + geom_density2d() + coord_trans(y="log10")
+m + stat_density2d(aes(fill = ..level..), geom="polygon")
+```
+
+```{r}
+t1_dens_values <- scatter_ebl_tth %>% filter(trial == 1, !is.na(TTH), !is.na(ebl)) %$% kde2d(TTH, ebl)
+t1_densdf <- data.frame(expand.grid(TTH=t1_dens_values$x , ebl=t1_dens_values$y), z=as.vector(t1_dens_values$z))
+
+t2_dens_values <- scatter_ebl_tth %>% filter(trial == 2, !is.na(TTH), !is.na(ebl)) %$% kde2d(TTH, ebl)
+t2_densdf <- data.frame(expand.grid(TTH=t2_dens_values$x , ebl=t2_dens_values$y), z=as.vector(t2_dens_values$z))
+
+scale_max_to_use <- max(t1_densdf$z, t2_densdf$z)
+
+# TTH vs. EBL density heatmap
+tth_ebl_heatmap_t1 <- ggplot(scatter_ebl_tth %>% filter(trial == 1), aes(TTH, ebl)) +
+  stat_density_2d(aes(fill = ..density..), geom = "raster", contour = FALSE) +
+  scale_fill_distiller(palette= "Spectral", direction=-1) +
+  # guides(fill=guide_legend()) +
+  scale_x_continuous(expand = c(0, 0), limits=c(0, max(scatter_ebl_tth$TTH))) +
+  scale_y_continuous(expand = c(0, 0), limits=c(0, max(scatter_ebl_tth$ebl))) +
+  ggtitle('Trial 1 EBL vs. TTH density') +
+  xlab('Time to Hemostatis (sec)') + ylab('Estimated Blood Loss (mL)') +
+  theme(
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size=12)
+  )
+
+# TTH vs. EBL density heatmap
+tth_ebl_heatmap_t2 <- ggplot(scatter_ebl_tth %>% filter(trial == 2), aes(TTH, ebl)) +
+  stat_density_2d(aes(fill = ..density..), geom = "raster", contour = FALSE) +
+  scale_fill_distiller(palette= "Spectral", direction=-1) +
+  scale_x_continuous(expand = c(0, 0), limits=c(0, max(scatter_ebl_tth$TTH))) +
+  scale_y_continuous(expand = c(0, 0), limits=c(0, max(scatter_ebl_tth$ebl))) +
+  xlab('Time to Hemostatis (sec)') + ylab('Estimated Blood Loss (mL)') +
+  ggtitle('Trial 2 EBL vs. TTH density') +
+  theme(
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size=12)
+  )
+```
+
+```{r}
+density_plot_row <- ggpubr::ggarrange(
+  tth_ebl_heatmap_t1, tth_ebl_heatmap_t2, 
+  ncol = 2, legend = 'right', common.legend = TRUE,
+  labels = c('a', 'b')
+)
+density_plot_row
+```
+
+```{r}
+# Success rate general
+preprocess_for_success_rate <- raw_data %>% 
+  dplyr::select(SurveyID, Group, `Trial 1` = `Trial 1 Success`, `Trial 2`=`Trial 2 Success`) %>%
+  gather(trial, s, -SurveyID, -Group) %>%
+  filter(!is.na(s))
+
+success_rate_overall <- preprocess_for_success_rate %>%
+  group_by(trial) %>%
+  dplyr::summarise( 
+    rate=length(which(s==1))/n()
+  )
+
+# Contigency table creation
+fisher_success_overall <- preprocess_for_success_rate %>%
+  group_by(trial, s) %>%
+  dplyr::summarise(count=n()) %>%
+  mutate(v=ifelse(s==0, 'fail', 'success')) %>%
+  dcast(trial ~ v, value.var='count') %>%
+  column_to_rownames('trial') %>%
+  fisher.test()
+
+success_overall_p_text <- ifelse(fisher_success_overall$p.value < 0.001, 'p < 0.001', ifelse(fisher_success_overall$p.value < 0.05, paste0('p = ', round(fisher_success_overall$p.value, 2)), ''))
+```
+
+```{r}
+overall_success_rate <- ggplot(success_rate_overall, aes(trial, rate*100, fill=trial)) +
+  geom_bar(stat = 'identity', color='black') +
+  annotate('text', x = 2, y = 1.05 * 100, label=success_overall_p_text, size=12/ggplot2:::.pt) +
+  scale_fill_jama() +
+  # facet_wrap(~Group) +
+  xlab('Trial Number') +
+  ylab('Trial success rate (%)') +
+  scale_y_continuous(limits = c(0, 100 * 1.1), expand = c(0,0)) +
+  theme_bw() +
+  theme(
+    text = element_text(size = 12),
+    axis.text = element_text(size=12),
+    # axis.title = element_text(size=12),
+    axis.title.x = element_blank(),
+    panel.grid.major.x = element_blank(),
+    legend.position = 'none',
+    strip.text = element_text(size = 12)
+  )
+```
+
+```{r include=FALSE}
+tth_columns <- raw_data %>% colnames() %>% .[grep('TTH', .)] %>% setdiff(., c('Trial 1 TTH_1', 'Trial 2 TTH_1'))
+tth_data <- raw_data %>%
+  dplyr::select(SurveyID, Group, tth_columns) %>%
+  gather(var, value, -SurveyID, -Group) %>%
+  mutate(trial = gsub(' TTH', '', var)) %>%
+  mutate(trial=factor(trial, c('Trial 1', 'Trial 2', 'Trial 3')))
+
+# To look for those that have complete data
+counts_by_individual <- tth_data %>%
+  group_by(SurveyID) %>%
+  dplyr::summarise(count=length(which(!is.na(value)))) %>%
+  arrange(-count)
+```
+
+```{r}
+tth_bar_plot_data <- tth_data %>% 
+  filter(trial != 'Trial 3') %>% 
+  mutate(Group='All') %>%
+  group_by(trial) %>%
+  dplyr::summarise(m=mean(value, na.rm = T), s=sd(value, na.rm = T)/sqrt(length(value[!is.na(value)])))
+```
+
+```{r}
+tth_overall_plot <- ggplot(tth_bar_plot_data, aes(trial, m, fill=trial)) +
+  geom_bar(stat='identity', color='black', alpha = 1) +
+  geom_errorbar(aes(ymin=m-s, ymax=m+s), width=0.2) +
+  annotate(x = 2, y = 300*1.05, geom = 'text', label = 'p < 0.001', size = 12/ggplot2::.pt) +
+  # geom_point(position = position_jitter(width = 0.25)) +
+  scale_fill_jama() +
+  # facet_wrap(~Group) +
+  xlab('Trial Number') +
+  ylab('Time to Hemostasis') +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 300*1.1)) +
+  theme_bw() +
+  theme(
+    text = element_text(size = 12),
+    axis.text = element_text(size=12),
+    # axis.title = element_text(size=12),
+    axis.title.x = element_blank(),
+    panel.grid.major.x = element_blank(),
+    legend.position = 'none',
+    strip.text = element_text(size = 12)
+  )
+```
+
+```{r}
+fig1_table <- preprocess_for_success_rate %>%
+  reshape2::dcast(SurveyID + Group ~ trial, value.var='s') %>%
+  mutate(G=paste0(`Trial 1` ,`Trial 2`)) %>%
+  group_by(G) %>%
+  dplyr::summarise(count=n()) %>%
+  filter(G %in% c('00', '01', '10', '11')) %>%
+  mutate(
+    `Trial 1`=ifelse(grepl('^0', G), 'T1 Fail', 'T1 Success'),
+    `Trial 2`=ifelse(grepl('0$', G), 'T2 Fail', 'T2 Success')
+  ) %>%
+  reshape2::dcast(`Trial 1` ~ `Trial 2`, value.var='count') %>%
+  column_to_rownames(var='Trial 1')
+
+fig1_table_placeholder <- grid.table(fig1_table)
+```
+
+```{r}
+second_row <- ggpubr::ggarrange(
+  overall_success_rate, tth_overall_plot, tableGrob((fig1_table)),
+  ncol = 3, labels = c('c', 'd', 'e')
+)
+```
+
+
+```{r}
+# Maybe highlight (with grey in the background) for the ones that improved (right lower quadrant, highlight in red for example)
+tth_change_overall <- ggplot(change_in_scores, aes(SurveyID, change_in_tth)) +
+  geom_segment(aes(x = SurveyID, xend=SurveyID, y = 0, yend = change_in_tth), color='grey', alpha=0.75) +
+  geom_point(color='black') +
+  # guides(color=guide_legend(title = NA, title.position = 'bottom')) +
+  # scale_color_manual(values=pal_jama("default")(1), na.value=pal_jama("default")(7)[2], breaks=c('Training Rescue')) +
+  xlab('Individual ranked by improvement based on TTH change') +
+  ylab('TTH seconds saved (Trial 1 vs. Trial 2)') +
+  scale_x_discrete(expand=c(0.01, 0.01)) +
+  theme_bw() +
+  theme(
+    legend.position = c(0.01,0.99),
+    legend.justification = c(0,1),
+    legend.background = element_rect(fill='transparent'),
+    legend.text = element_text(size=12),
+    legend.title = element_blank(),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    # axis.title.x = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank()
+  )
+```
+
+```{r}
+ebl_TTH_correlation <- scatter_ebl_tth %>%
+  filter(!is.na(TTH), !is.na(ebl)) %$%
+  cor.test(TTH, ebl)
+
+scatter_plot_attempt <- ggplot(scatter_ebl_tth %>% mutate(trial=paste0('Trial ', trial)), aes(TTH, ebl, color=trial)) +
+  geom_point(size=2, alpha=0.5) +
+  scale_color_jama() +
+  guides(color=guide_legend(title=NULL)) +
+  geom_smooth(method = 'lm', color='black', linetype=2) +
+  annotate('text', x = max(scatter_ebl_tth$TTH, na.rm = T), y = min(scatter_ebl_tth$ebl, na.rm = T), label=paste0('R: ', round(ebl_TTH_correlation$estimate, 2)), size = 12/ggplot2:::.pt, hjust=1, vjust=0) +
+  xlab('Time to Hemostasis (sec)') + ylab('Estimated Blood Loss (mL)') +
+  # scale_x_log10() +
+  # scale_y_log10() +
+  # facet_wrap(~Group) +
+  theme_bw() +
+  theme(
+    legend.position = c(0,0.99),
+    legend.justification = c(0,1),
+    legend.text = element_text(size=12),
+    legend.title = element_text(size=12),
+    legend.background = element_rect(fill='transparent'),
+    legend.key=element_rect(fill='transparent'),
+    axis.text = element_text(size=12),
+    axis.title = element_text(size=12)
+  )
+```
+
+```{r}
+third_row <- ggpubr::ggarrange(
+  tth_change_overall, scatter_plot_attempt,
+  ncol = 2, widths = c(1,1), labels = c('f', 'g')
+)
+```
+
+```{r}
+# Final figure
+figure1_clean <- ggpubr::ggarrange(
+  density_plot_row, 
+  second_row, 
+  third_row, nrow = 3
+)
+
+ggsave(figure1_clean, filename = file.path(source_dir, 'figures', 'figure1.png'), width = 8, height = 10, units = 'in')
+```
+
+
+
+
+
+
+
+
+
+
