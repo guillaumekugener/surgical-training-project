@@ -1,0 +1,40 @@
+---
+title: "EBL TTH scatter"
+author: "Guillaume Kugener"
+date: "4/27/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+source('~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/carotid_model/preprocess_data.R')
+```
+
+```{r}
+scatter_ebl_tth <- raw_data %>% 
+  dplyr::select(SurveyID, Group, `Trial 1 TTH`, `Trial 2 TTH`, `trial 1 ebl`, `trial 2 ebl`) %>%
+  gather(var, value, -SurveyID, -Group) %>%
+  mutate(variable = gsub('.* ', '', var)) %>%
+  mutate(trial = stringr::str_extract(string=var, pattern='[0-9]+')) %>%
+  reshape2::dcast(SurveyID + Group + trial ~ variable, value.var='value')
+```
+
+```{r}
+mean_ebl_t1 <- scatter_ebl_tth %>% filter(trial == 1) %$% mean(ebl)
+mean_tth_t1 <- scatter_ebl_tth %>% filter(trial == 1) %$% mean(TTH, na.rm = T)
+
+sd_ebl_t1 <- scatter_ebl_tth %>% filter(trial == 1) %$% sd(ebl)
+sd_tth_t1 <- scatter_ebl_tth %>% filter(trial == 1) %$% sd(TTH, na.rm = T)
+
+scatter_ebl_tth %<>%
+  mutate(
+    TTH_z=(TTH-mean_tth_t1)/sd_tth_t1,
+    ebl_z=(ebl-mean(ebl, na.rm=T))/sd_ebl_t1
+  )
+
+ggplot(scatter_ebl_tth, aes(ebl_z, TTH_z, color=trial)) +
+  geom_point() +
+  geom_hline(yintercept = 0) +
+  geom_vline(xintercept = 0) + 
+  facet_wrap(~trial)
+```

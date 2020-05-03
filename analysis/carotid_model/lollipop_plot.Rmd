@@ -1,0 +1,222 @@
+---
+title: "Lollipop plot"
+author: "Guillaume Kugener"
+date: "4/27/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+source('~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/carotid_model/preprocess_data.R')
+```
+
+```{r}
+tth_columns <- raw_data %>% colnames() %>% .[grep('TTH', .)] %>% setdiff(., c('Trial 1 TTH_1', 'Trial 2 TTH_1'))
+ebl_columns <- raw_data %>% colnames() %>% .[grep('ebl', .)]
+
+most_improved_data <- raw_data %>%
+  dplyr::select(SurveyID, Group, tth_columns, `Trial 1 Success`, `Trial 2 Success`) %>%
+  gather(var, value, -SurveyID, -Group, -`Trial 1 Success`, -`Trial 2 Success`) %>%
+  mutate(trial = gsub(' TTH', '', var)) %>%
+  mutate(trial=factor(trial, c('Trial 1', 'Trial 2', 'Trial 3'))) %>%
+  filter(`Trial 1 Success` == 0, `Trial 2 Success` == 1) %>%
+  dplyr::rename(tth=value) %>%
+  left_join(., 
+    raw_data %>%
+      dplyr::select(SurveyID, Group, `Trial 1 Success`, `Trial 2 Success`, ebl_columns) %>%
+      magrittr::set_colnames(gsub('  ', ' ', colnames(.))) %>%
+      gather(var, value, -SurveyID, -Group, -`Trial 1 Success`, -`Trial 2 Success`) %>%
+      mutate(trial = gsub(' ebl', '', var)) %>%
+      mutate(trial=factor(gsub('^t', 'T', trial), c('Trial 1', 'Trial 2', 'Trial 3'))) %>%
+      filter(`Trial 1 Success` == 0, `Trial 2 Success` == 1) %>%
+      dplyr::select(SurveyID, trial, ebl=value),
+    by = c('SurveyID', 'trial')
+  )
+```
+
+```{r}
+scatter_ebl_tth <- raw_data %>% 
+  dplyr::select(SurveyID, Group, `Trial 1 TTH`, `Trial 2 TTH`, `trial 1 ebl`, `trial 2 ebl`) %>%
+  gather(var, value, -SurveyID, -Group) %>%
+  mutate(variable = gsub('.* ', '', var)) %>%
+  mutate(trial = stringr::str_extract(string=var, pattern='[0-9]+')) %>%
+  reshape2::dcast(SurveyID + Group + trial ~ variable, value.var='value')
+
+change_in_scores <- scatter_ebl_tth %>% 
+  setDT() %>% 
+  dcast(SurveyID + Group ~ trial, value.var=c('ebl', 'TTH')) %>%
+  mutate(change_in_tth=TTH_1 - TTH_2, change_in_ebl = ebl_1 - ebl_2)
+
+ordered_survey_id <- change_in_scores %>%
+  arrange(change_in_tth) %$%
+  SurveyID
+
+change_in_scores %<>% mutate(SurveyID = factor(SurveyID, levels=ordered_survey_id))
+change_in_scores %<>% mutate(Group2=ifelse(SurveyID %in% most_improved_data$SurveyID, 'Training rescue', NA))
+```
+
+```{r}
+quartile_cutoff <- change_in_scores %$% quantile(change_in_tth, na.rm=T, c(0.75))
+change_in_scores %<>% mutate(Group3=ifelse(change_in_tth >= quartile_cutoff, 'MIQ', NA))
+```
+
+```{r}
+trial_1_rank_order <- change_in_scores %>% arrange(TTH_1, -change_in_tth) %$% SurveyID
+absolute_change_in_tth <- ggplot(change_in_scores %>% mutate(SurveyID=factor(SurveyID, levels=trial_1_rank_order)), aes(color=Group2)) +
+  geom_segment(aes(x = SurveyID, xend=SurveyID, y = TTH_1, yend = TTH_2)) +
+  geom_point(aes(x=SurveyID, y= TTH_1), color = 'blue') +
+  geom_point(aes(x=SurveyID, y= TTH_2), color='red') +
+  scale_color_manual(values=c('Training rescue'='black', 'MIQ'='black'), breaks=c('Training rescue'),na.value='grey') +
+  xlab('Individual ranked by improvement based on TTH change') +
+  ylab('Time to Hemostasis (sec)') +
+  theme_bw() +
+  theme(
+    legend.position = 'right',
+    legend.justification = 'top',
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank()
+  )
+
+absolute_change_in_tth
+
+ggsave(absolute_change_in_tth, filename = file.path(plot_dir, 'absolute_change_in_tth.png'), width = 8, height = 5, device='png')
+```
+
+```{r}
+ebl_trial_1_rank_order <- change_in_scores %>% arrange(ebl_1, -change_in_ebl) %$% SurveyID
+absolute_change_in_ebl <- ggplot(change_in_scores %>% mutate(SurveyID=factor(SurveyID, levels=ebl_trial_1_rank_order)), aes(color=Group2)) +
+  geom_segment(aes(x = SurveyID, xend=SurveyID, y = ebl_1, yend = ebl_2)) +
+  geom_point(aes(x=SurveyID, y= ebl_1), color = 'blue') +
+  geom_point(aes(x=SurveyID, y= ebl_2), color='red') +
+  scale_color_manual(values=c('Training rescue'='black', 'MIQ'='black'), breaks=c('Training rescue'), na.value='grey') +
+  xlab('Individual ranked by improvement based on EBL change') +
+  ylab('Estimated Blood Loss (mL)') +
+  theme_bw() +
+  theme(
+    legend.position = 'right',
+    legend.justification = 'top',
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+
+absolute_change_in_ebl
+
+ggsave(absolute_change_in_ebl, filename = file.path(plot_dir, 'absolute_change_in_ebl.png'), width = 8, height = 5, device='png')
+```
+
+```{r}
+# Most improved demographics
+most_improved_demographics <- raw_data %>%
+  filter(`Trial 1 Success`==0, `Trial 2 Success`==1) %>% 
+  dplyr::select(
+    SurveyID, Group, Source,
+    `Trial 1 Success`, `Trial 2 Success`,
+    `Trial 1 TTH`, `Trial 2 TTH`, `trial 1 ebl`, `trial 2 ebl`,
+    generalconfidencepre, generalconfidencepost,
+    carotidconfidencepre, carotidconfidencepost,
+    priorreal, priorsim, Specialty,
+    Attyears, endolast12mo, cadaverlast12
+  ) %>%
+  filter(SurveyID %in% most_improved_data$SurveyID)
+  # dplyr::select(
+  #   SurveyID, Group, Source,
+  #   generalconfidencepre, generalconfidencepost, carotidconfidencepre, carotidconfidencepost,
+  #   endolast12mo, cadaverlast12, priorreal, priorsim, Attyears, Totyears, Specialty 
+  # )
+
+never_failed <- raw_data %>%
+  filter(`Trial 1 Success`==1, `Trial 2 Success`==1) %>% 
+  dplyr::select(
+    SurveyID, Group, Source,
+    `Trial 1 Success`, `Trial 2 Success`,
+    `Trial 1 TTH`, `Trial 2 TTH`, `trial 1 ebl`, `trial 2 ebl`,
+    generalconfidencepre, generalconfidencepost,
+    carotidconfidencepre, carotidconfidencepost,
+    priorreal, priorsim, Specialty,
+    Attyears, endolast12mo, cadaverlast12
+  )# %>% dplyr::summarise_if(is.numeric, funs(mean(., na.rm = T)))
+
+multi_most_improved <- rbind(
+  most_improved_demographics %>% mutate(MIQ = 'MIQ'),
+  never_failed %>% mutate(MIQ='Never Failed')
+) %>% mutate(label=ifelse(MIQ=='MIQ', 1, 0))
+
+summary(multi_most_improved)
+
+logistic_multi_most_improved <- lm(`Trial 1 TTH` ~ Group + Specialty + priorsim + priorreal + endolast12mo + cadaverlast12 + generalconfidencepre + carotidconfidencepre, data = multi_most_improved)
+
+logistic_multi_most_improved
+
+summary(logistic_multi_most_improved)
+```
+
+```{r eval=FALSE}
+mi_dems <- most_improved_demographics %>%
+  dplyr::summarise_if(is.numeric, funs(mean(., na.rm=T)))
+
+dems_combined <- rbind(mi_dems %>% mutate(G='MI'), never_failed %>% mutate(G='NF')) %>%
+  gather(var, value, -G)
+
+ggplot(dems_combined, aes(var, value, fill=G)) +
+  geom_bar(stat='identity', position=position_dodge()) +
+  facet_wrap(~var, scales = 'free')
+```
+
+```{r}
+ggplot(scatter_ebl_tth %>% mutate(SurveyID = factor(SurveyID, levels = ordered_survey_id)), aes(SurveyID, TTH, fill = trial)) +
+  geom_bar(stat = 'identity', position = position_dodge()) +
+  # geom_bar(stat='identity', alpha = 0.5) +
+  ylab('EBL mL saved (Trial 1 vs. Trial 2)') +
+  theme_bw() +
+  theme(
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+```
+
+```{r}
+ebl_TTH_correlation <- scatter_ebl_tth %>%
+  filter(!is.na(TTH), !is.na(ebl)) %$%
+  cor(TTH, ebl)
+
+scatter_plot_attempt <- ggplot(scatter_ebl_tth, aes(TTH, ebl, color=trial)) +
+  geom_point() +
+  # geom_segment(data=change_in_scores,
+    # aes(x = TTH_1, xend=TTH_2, y = ebl_1, yend = ebl_2), color='grey', alpha = 0.15, arrow = arrow(length = unit(0.25, 'cm'))) +
+  geom_smooth(method = 'lm', color='black', linetype=2) +
+  annotate('text', x = min(scatter_ebl_tth$TTH, na.rm = T)*1.025, y = max(scatter_ebl_tth$ebl, na.rm = T), label=paste0('R: ', round(ebl_TTH_correlation, 2)), size = 12/ggplot2:::.pt) +
+  scale_x_log10() +
+  scale_y_log10() +
+  # facet_wrap(~Group) +
+  theme_bw()
+
+scatter_plot_attempt
+
+ggsave(scatter_plot_attempt, filename = file.path(plot_dir, 'tth_ebl_scatter_plot.png'), width = 8, height = 5, device='png')
+```
+
+```{r}
+# TTH vs. EBL density heatmap
+tth_ebl_heatmap_t1 <- ggplot(scatter_ebl_tth %>% filter(trial == 1), aes(TTH, ebl)) +
+  stat_density_2d(aes(fill = ..density..), geom = "raster", contour = FALSE) +
+  scale_fill_distiller(palette= "Spectral", direction=-1) +
+  scale_x_continuous(expand = c(0, 0), limits=c(0, max(scatter_ebl_tth$TTH))) +
+  scale_y_continuous(expand = c(0, 0), limits=c(0, max(scatter_ebl_tth$ebl))) +
+  ggtitle('Trial 1 EBL vs. TTH density')
+
+# TTH vs. EBL density heatmap
+tth_ebl_heatmap_t2 <- ggplot(scatter_ebl_tth %>% filter(trial == 2), aes(TTH, ebl)) +
+  stat_density_2d(aes(fill = ..density..), geom = "raster", contour = FALSE) +
+  scale_fill_distiller(palette= "Spectral", direction=-1) +
+  scale_x_continuous(expand = c(0, 0), limits=c(0, max(scatter_ebl_tth$TTH))) +
+  scale_y_continuous(expand = c(0, 0), limits=c(0, max(scatter_ebl_tth$ebl))) +
+  ggtitle('Trial 2 EBL vs. TTH density')
+  # theme(
+  #   legend.position='none'
+  # )
+
+ggsave(tth_ebl_heatmap_t1, filename = file.path(plot_dir, 'tth_ebl_heatmap_t1.png'), width = 8, height = 5)
+ggsave(tth_ebl_heatmap_t2, filename = file.path(plot_dir, 'tth_ebl_heatmap_t2.png'), width = 8, height = 5)
+```

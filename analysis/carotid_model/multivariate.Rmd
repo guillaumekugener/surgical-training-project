@@ -1,0 +1,237 @@
+---
+title: "Multivariate analysis"
+author: "Guillaume Kugener"
+date: "4/30/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+source('~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/carotid_model/preprocess_data.R')
+```
+
+```{r}
+confidence_value_order <- c(
+  'generalconfidencepre', 'generalconfidencepost', 'carotidconfidencepre', 'carotidconfidencepost', 
+  'SpecialtyOtolaryngology',
+  'priorreal', 'priorsim',
+  'Totyears', 'Attyears', 
+  'endolast12mo', 'cadaverlast12'
+)
+
+# logistic regression - what predicts trial 1 success from a set of variables that we have
+pred_logisit_data <- raw_data %>%
+  dplyr::select(
+    SurveyID, Group, Source,
+    `Trial 1 Success`, `Trial 2 Success`,
+    `Trial 1 TTH`, `Trial 2 TTH`, `trial 1 ebl`, `trial 2 ebl`,
+    generalconfidencepre, generalconfidencepost,
+    carotidconfidencepre, carotidconfidencepost,
+    priorreal, priorsim,
+    Attyears, endolast12mo, cadaverlast12
+  ) %>% mutate(Group=factor(Group)) %>%
+  mutate(Attyears=ifelse(Group=='Trainee', 0, Attyears))
+
+t1s_pred <- glm(`Trial 1 Success` ~ Group + generalconfidencepre + generalconfidencepost + carotidconfidencepre + carotidconfidencepost, data=pred_logisit_data, family = 'binomial')
+t2s_pred <- glm(`Trial 2 Success` ~ Group + generalconfidencepre + generalconfidencepost + carotidconfidencepre + carotidconfidencepost, data=pred_logisit_data, family = 'binomial')
+
+# Train logistic regression
+results_logit_data <- data.frame(
+  coeff_names=names(coefficients(t1s_pred)),
+  T1_c=coefficients(t1s_pred),
+  T1_p=coef(summary(t1s_pred))[,4],
+  T2_c=coefficients(t2s_pred),
+  T2_p=coef(summary(t2s_pred))[,4],
+  stringsAsFactors = F
+) %>%
+  gather(var, value, -coeff_names) %>%
+  mutate(
+    trial = stringr::str_extract(string=var, pattern='^T[12]'),
+    variable = stringr::str_extract(string=var, pattern='[cp]$')
+  ) %>% reshape2::dcast(coeff_names + trial ~ variable, value.var='value') %>%
+  filter(coeff_names != '(Intercept)') %>%
+  mutate(coeff_names=factor(coeff_names, levels=c('GroupTrainee', confidence_value_order)))
+
+trial_success_conf_multi <- ggplot(results_logit_data, aes(coeff_names, abs(c), fill=trial)) +
+  geom_bar(stat='identity', position=position_dodge()) + 
+  geom_text(data = results_logit_data %>% filter(p < 0.05) %>% mutate(text='*', y=max(abs(results_logit_data$c))*1.025), aes(coeff_names, y, label=text, color=trial), size=12/ggplot2:::.pt) +
+  xlab('Variable') + ylab('Model weight') + ggtitle('Multivariate prediction of trial success')
+
+trial_success_conf_multi
+
+ggsave(trial_success_conf_multi, filename = file.path(plot_dir, 'trial_success_conf_multi.png'), width = 8, height = 5)
+```
+
+```{r}
+tth_t1s_pred <- lm(`Trial 1 TTH` ~ Group + generalconfidencepre + generalconfidencepost + carotidconfidencepre + carotidconfidencepost, data=pred_logisit_data)
+tth_t2s_pred <- lm(`Trial 2 TTH` ~ Group + generalconfidencepre + generalconfidencepost + carotidconfidencepre + carotidconfidencepost, data=pred_logisit_data)
+
+# Train logistic regression
+tth_results_lm_data <- data.frame(
+  coeff_names=names(coefficients(t1s_pred)),
+  T1_c=coefficients(tth_t1s_pred),
+  T1_p=coef(summary(tth_t1s_pred))[,4],
+  T2_c=coefficients(tth_t2s_pred),
+  T2_p=coef(summary(tth_t2s_pred))[,4],
+  stringsAsFactors = F
+) %>%
+  gather(var, value, -coeff_names) %>%
+  mutate(
+    trial = stringr::str_extract(string=var, pattern='^T[12]'),
+    variable = stringr::str_extract(string=var, pattern='[cp]$')
+  ) %>% reshape2::dcast(coeff_names + trial ~ variable, value.var='value') %>%
+  filter(coeff_names != '(Intercept)') %>%
+  mutate(coeff_names=factor(coeff_names, levels=c('GroupTrainee', confidence_value_order)))
+
+tth_success_conf_multi <- ggplot(tth_results_lm_data, aes(coeff_names, abs(c), fill=trial)) +
+  geom_bar(stat='identity', position=position_dodge()) + 
+  geom_text(data = tth_results_lm_data %>% filter(p < 0.05) %>% mutate(text='*', y=max(abs(tth_results_lm_data$c))*1.025), aes(coeff_names, y, label=text, color=trial), size=12/ggplot2:::.pt) +
+  xlab('Variable') + ylab('Model weight') + ggtitle('Multivariate prediction of TTH')
+
+tth_success_conf_multi
+
+ggsave(tth_success_conf_multi, filename = file.path(plot_dir, 'tth_conf_multi.png'), width = 8, height = 5)
+```
+
+```{r}
+ebl_t1s_pred <- lm(`trial 1 ebl` ~ Group + generalconfidencepre + generalconfidencepost + carotidconfidencepre + carotidconfidencepost, data=pred_logisit_data)
+ebl_t2s_pred <- lm(`trial 2 ebl` ~ Group + generalconfidencepre + generalconfidencepost + carotidconfidencepre + carotidconfidencepost, data=pred_logisit_data)
+
+# Train logistic regression
+ebl_results_lm_data <- data.frame(
+  coeff_names=names(coefficients(t1s_pred)),
+  T1_c=coefficients(ebl_t1s_pred),
+  T1_p=coef(summary(ebl_t1s_pred))[,4],
+  T2_c=coefficients(ebl_t2s_pred),
+  T2_p=coef(summary(ebl_t2s_pred))[,4],
+  stringsAsFactors = F
+) %>%
+  gather(var, value, -coeff_names) %>%
+  mutate(
+    trial = stringr::str_extract(string=var, pattern='^T[12]'),
+    variable = stringr::str_extract(string=var, pattern='[cp]$')
+  ) %>% reshape2::dcast(coeff_names + trial ~ variable, value.var='value') %>%
+  filter(coeff_names != '(Intercept)') %>%
+  mutate(coeff_names=factor(coeff_names, levels=c('GroupTrainee', confidence_value_order)))
+
+ebl_success_conf_multi <- ggplot(ebl_results_lm_data, aes(coeff_names, abs(c), fill=trial)) +
+  geom_bar(stat='identity', position=position_dodge()) + 
+  geom_text(data = ebl_results_lm_data %>% filter(p < 0.05) %>% mutate(text='*', y=max(abs(ebl_results_lm_data$c))*1.025), aes(coeff_names, y, label=text, color=trial), size=12/ggplot2:::.pt) +
+  xlab('Variable') + ylab('Model weight') + ggtitle('Multivariate prediction of EBL')
+
+ebl_success_conf_multi
+
+ggsave(ebl_success_conf_multi, filename = file.path(plot_dir, 'ebl_conf_multi.png'), width = 8, height = 5)
+```
+
+## Demos vs. performance (success, TTH, EBL)
+
+```{r}
+demographics_pred_logisit_data <- raw_data %>%
+  dplyr::select(
+    SurveyID, Group, Source,
+    `Trial 1 Success`, `Trial 2 Success`,
+    `Trial 1 TTH`, `Trial 2 TTH`, `trial 1 ebl`, `trial 2 ebl`,
+    Specialty,
+    priorreal, priorsim,
+    Totyears, Attyears, endolast12mo, cadaverlast12,
+    generalconfidencepre, carotidconfidencepre, carotidconfidencepost, generalconfidencepost
+  ) %>% mutate(Group=factor(Group)) %>%
+  mutate(Attyears=ifelse(Group=='Trainee', 0, Attyears))
+```
+
+```{r}
+dems_t1s_pred <- glm(`Trial 1 Success` ~ Attyears + Specialty + priorsim + priorreal + endolast12mo + cadaverlast12 + generalconfidencepre + carotidconfidencepre, data=demographics_pred_logisit_data, family = 'binomial')
+dems_t2s_pred <- glm(`Trial 2 Success` ~ Attyears + Specialty + priorsim + priorreal + endolast12mo + cadaverlast12 + generalconfidencepre + carotidconfidencepre, data=demographics_pred_logisit_data, family = 'binomial')
+
+# Train logistic regression
+dems_results_logit_data <- data.frame(
+  coeff_names=names(coefficients(dems_t1s_pred)),
+  T1_c=coefficients(dems_t1s_pred),
+  T1_p=coef(summary(dems_t1s_pred))[,4],
+  T2_c=coefficients(dems_t2s_pred),
+  T2_p=coef(summary(dems_t2s_pred))[,4],
+  stringsAsFactors = F
+) %>%
+  gather(var, value, -coeff_names) %>%
+  mutate(
+    trial = stringr::str_extract(string=var, pattern='^T[12]'),
+    variable = stringr::str_extract(string=var, pattern='[cp]$')
+  ) %>% reshape2::dcast(coeff_names + trial ~ variable, value.var='value') %>%
+  filter(coeff_names != '(Intercept)') %>%
+  mutate(coeff_names=factor(coeff_names, levels=c('GroupTrainee', confidence_value_order)))
+
+dems_trial_success_conf_multi <- ggplot(dems_results_logit_data, aes(coeff_names, abs(c), fill=trial)) +
+  geom_bar(stat='identity', position=position_dodge()) + 
+  geom_text(data = dems_results_logit_data %>% filter(p < 0.05) %>% mutate(text='*', y=max(abs(dems_results_logit_data$c))*1.025), aes(coeff_names, y, label=text, color=trial), size=12/ggplot2:::.pt) +
+  xlab('Variable') + ylab('Model weight') + ggtitle('Multivariate prediction of trial success')
+
+dems_trial_success_conf_multi
+
+ggsave(dems_trial_success_conf_multi, filename = file.path(plot_dir, 'demographics_trial_success_conf_multi.png'), width = 12, height = 5)
+```
+
+```{r}
+dems_tth_t1s_pred <- lm(`Trial 1 TTH` ~ Attyears + Specialty + priorsim + priorreal + endolast12mo + cadaverlast12 + generalconfidencepre + carotidconfidencepre, data=demographics_pred_logisit_data)
+dems_tth_t2s_pred <- lm(`Trial 2 TTH` ~ Attyears + Specialty + priorsim + priorreal + endolast12mo + cadaverlast12 + generalconfidencepre + carotidconfidencepre, data=demographics_pred_logisit_data)
+
+# Train logistic regression
+dems_tth_results_lm_data <- data.frame(
+  coeff_names=names(coefficients(dems_tth_t1s_pred)),
+  T1_c=coefficients(dems_tth_t1s_pred),
+  T1_p=coef(summary(dems_tth_t1s_pred))[,4],
+  T2_c=coefficients(dems_tth_t2s_pred),
+  T2_p=coef(summary(dems_tth_t2s_pred))[,4],
+  stringsAsFactors = F
+) %>%
+  gather(var, value, -coeff_names) %>%
+  mutate(
+    trial = stringr::str_extract(string=var, pattern='^T[12]'),
+    variable = stringr::str_extract(string=var, pattern='[cp]$')
+  ) %>% reshape2::dcast(coeff_names + trial ~ variable, value.var='value') %>%
+  filter(coeff_names != '(Intercept)') %>%
+  mutate(coeff_names=factor(coeff_names, levels=c('GroupTrainee', confidence_value_order)))
+
+dems_trial_tth_conf_multi <- ggplot(dems_tth_results_lm_data, aes(coeff_names, abs(c), fill=trial)) +
+  geom_bar(stat='identity', position=position_dodge()) + 
+  geom_text(data = dems_tth_results_lm_data %>% filter(p < 0.05) %>% mutate(text='*', y=max(abs(dems_tth_results_lm_data$c))*1.025), aes(coeff_names, y, label=text, color=trial), size=12/ggplot2:::.pt) +
+  xlab('Variable') + ylab('Model weight') + ggtitle('Multivariate prediction of TTH')
+
+dems_trial_tth_conf_multi
+
+ggsave(dems_trial_tth_conf_multi, filename = file.path(plot_dir, 'demographics_trial_tth_conf_multi.png'), width = 12, height = 5)
+```
+
+```{r}
+dems_ebl_t1s_pred <- lm(`trial 1 ebl` ~ Attyears + Specialty + priorsim + priorreal + endolast12mo + cadaverlast12 + generalconfidencepre + carotidconfidencepre, data=demographics_pred_logisit_data)
+dems_ebl_t2s_pred <- lm(`trial 2 ebl` ~ Attyears + Specialty + priorsim + priorreal + endolast12mo + cadaverlast12 + generalconfidencepre + carotidconfidencepre, data=demographics_pred_logisit_data)
+
+# Train logistic regression
+dems_ebl_results_lm_data <- data.frame(
+  coeff_names=names(coefficients(dems_ebl_t1s_pred)),
+  T1_c=coefficients(dems_ebl_t1s_pred),
+  T1_p=coef(summary(dems_ebl_t1s_pred))[,4],
+  T2_c=coefficients(dems_ebl_t2s_pred),
+  T2_p=coef(summary(dems_ebl_t2s_pred))[,4],
+  stringsAsFactors = F
+) %>%
+  gather(var, value, -coeff_names) %>%
+  mutate(
+    trial = stringr::str_extract(string=var, pattern='^T[12]'),
+    variable = stringr::str_extract(string=var, pattern='[cp]$')
+  ) %>% reshape2::dcast(coeff_names + trial ~ variable, value.var='value') %>%
+  filter(coeff_names != '(Intercept)') %>%
+  mutate(coeff_names=factor(coeff_names, levels=c('GroupTrainee', confidence_value_order)))
+
+dems_trial_ebl_conf_multi <- ggplot(dems_ebl_results_lm_data, aes(coeff_names, abs(c), fill=trial)) +
+  geom_bar(stat='identity', position=position_dodge()) + 
+  geom_text(data = dems_ebl_results_lm_data %>% filter(p < 0.05) %>% mutate(text='*', y=max(abs(dems_ebl_results_lm_data$c))*1.025), aes(coeff_names, y, label=text, color=trial), size=12/ggplot2:::.pt) +
+  xlab('Variable') + ylab('Model weight') + ggtitle('Multivariate prediction of EBL')
+
+dems_trial_ebl_conf_multi
+
+ggsave(dems_trial_ebl_conf_multi, filename = file.path(plot_dir, 'demographics_trial_ebl_conf_multi.png'), width = 12, height = 5)
+```
+
+
+

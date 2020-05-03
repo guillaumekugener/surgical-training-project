@@ -12,7 +12,6 @@ knitr::opts_chunk$set(echo = FALSE, include=FALSE)
 ## I am slowly moving figures to their own files so that in the future it is easier to parse this file
 source('~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/carotid_model/preprocess_data.R')
 ```
-
 <!-- ## Summary of participants -->
 
 ```{r}
@@ -106,9 +105,87 @@ for (con in c("carotidconfidencepre", "carotidconfidencepost", "generalconfidenc
     }
   }
 }
+```
 
-#ggplot(survey_responses_data, aes(carotidconfidencepost, `Trial 2 TTH`, fill=carotidconfidencepost)) +
- # geom_boxplot()
+```{r eval=FALSE}
+success_by_confidence <- raw_data %>%
+  filter(!is.na(carotidconfidencepre)) %>% 
+  dplyr::select(
+    SurveyID, Group, 
+    carotidconfidencepre, carotidconfidencepost, 
+    generalconfidencepre, generalconfidencepost,
+    `Trial 1 TTH`, `Trial 2 TTH`,
+    `trial 1 ebl`, `trial 2 ebl`,
+    `Trial 1 Success`,  `Trial 2 Success`
+  ) %>%
+  dplyr::select(
+    SurveyID, Group, carotidconfidencepre, carotidconfidencepost, `Trial 1 Success`,  `Trial 2 Success`
+  ) %>%
+  gather(conf, conf_val, -SurveyID, -Group, -`Trial 1 Success`, -`Trial 2 Success`) %>%
+  gather(stat, stat_val, -SurveyID, -Group, -conf, -conf_val) %>%
+  filter(
+    (grepl('trial 1', stat, ignore.case = T) & grepl('confidencepre', conf)) |
+      (grepl('trial 2', stat, ignore.case = T) & grepl('confidencepost', conf))
+  ) %>%
+  mutate(
+    g=ifelse(grepl('trial 1', stat, ignore.case = T) | grepl('confidencepre', conf), 'pre', 'post')
+  )
+
+success_by_confidence_grouped <- success_by_confidence %>%
+  filter(!is.na(stat_val)) %>%
+  group_by(stat, conf_val, stat_val) %>%
+  dplyr::summarise(count=n()) %>%
+  group_by(stat, conf_val) %>%
+  mutate(total=sum(count))
+
+ggplot(success_by_confidence_grouped, aes(conf_val, count/total, fill=stat)) +
+  geom_bar(stat = 'identity', position = position_dodge())
+```
+
+```{r eval=FALSE}
+new_plot_confidence <- survey_responses_data %>%
+  dplyr::select(
+    SurveyID, Group, generalconfidencepre, generalconfidencepost, `trial 1 ebl`,  `trial 2 ebl`
+    # SurveyID, Group, generalconfidencepre, generalconfidencepost, `Trial 1 TTH`,  `Trial 2 TTH`
+  ) %>%
+  gather(conf, conf_val, -SurveyID, -Group, -`trial 1 ebl`, -`trial 2 ebl`) %>%
+  # gather(conf, conf_val, -SurveyID, -Group, -`Trial 1 TTH`, -`Trial 2 TTH`) %>%
+  gather(stat, stat_val, -SurveyID, -Group, -conf, -conf_val) %>%
+  filter(
+    (grepl('trial 1', stat, ignore.case = T) & grepl('generalconfidencepre', conf)) | 
+      (grepl('trial 2', stat, ignore.case = T) & grepl('generalconfidencepost', conf))
+  ) %>%
+  mutate(
+    g=ifelse(grepl('trial 1', stat, ignore.case = T) | grepl('generalconfidencepre', conf), 'pre', 'post')
+  ) #%>%
+  # setDT() %>%
+  # dcast(SurveyID + Group ~ g, value.var=c('ebl_val', 'conf_val'))
+
+ggplot(survey_responses_data, aes(`trial 1 ebl`/`Trial 1 TTH`, `trial 2 ebl`/`Trial 2 TTH`, color=carotidconfidencepost)) +
+  geom_point()
+
+ggplot(survey_responses_data %>%
+         mutate(fil=as.numeric(generalconfidencepost)-as.numeric(generalconfidencepre)), 
+       aes(`Trial 1 TTH`, `Trial 2 TTH`, fill=fil)) +
+  geom_point(color='black', pch=21, size=2) +
+  # scale_x_log10() + scale_y_log10() +
+  scale_fill_gradient2(high='red', low='blue', mid='white', midpoint=0) +
+  geom_abline(slope = 1, linetype=2)
+
+ggplot(survey_responses_data %>% 
+         mutate(change_in_conf=as.numeric(carotidconfidencepost) - as.numeric(carotidconfidencepre)), 
+       aes(factor(change_in_conf), `trial 2 ebl`-`trial 1 ebl`)) +
+  geom_boxplot() +
+  geom_point(position = position_jitter())
+  # scale_x_log10() + scale_y_log10() +
+  # geom_abline(slope = 1, linetype=2)
+
+
+ggplot(new_plot_confidence %>% mutate(g=factor(g, level=c('pre', 'post'))), aes(conf_val, stat_val, color=g)) +
+  geom_boxplot(alpha=0.5, outlier.shape = NA) +
+  # geom_violin() +
+  # geom_sina()
+  geom_point(position=position_jitterdodge())
 ```
 
 <!-- ## Compare sites -->
@@ -140,6 +217,14 @@ fisher_success_overall <- preprocess_for_success_rate %>%
 ```
 
 ```{r}
+preprocess_for_success_rate %>%
+  reshape2::dcast(SurveyID + Group ~ trial, value.var='s') %>%
+  mutate(G=paste0(`Trial 1` ,`Trial 2`)) %>%
+  group_by(G) %>%
+  dplyr::summarise(count=n())
+```
+
+```{r}
 # Success rate split by group (residents vs. attendings)
 success_rate_by_group <- preprocess_for_success_rate %>%
   group_by(Group, trial) %>%
@@ -167,14 +252,14 @@ fisher_residents_success_rate <- prep_fisher_success_by_group %>%
 ```
 
 ```{r}
-overall_success_rate <- ggplot(success_rate_overall, aes(trial, rate)) +
+overall_success_rate <- ggplot(success_rate_overall, aes(trial, rate*100)) +
   geom_bar(stat = 'identity', color='black', fill='grey', alpha = 0.5) +
-  annotate('text', x = 2, y = 1.05, label=ifelse(fisher_success_overall$p.value < 0.05, '*', ''), size=12/ggplot2:::.pt) +
+  annotate('text', x = 2, y = 1.05 * 100, label=ifelse(fisher_success_overall$p.value < 0.05, '*', ''), size=12/ggplot2:::.pt) +
   # scale_fill_jama() +
   # facet_wrap(~Group) +
   xlab('Trial Number') +
   ylab('Trial success rate') +
-  scale_y_continuous(limits = c(0, 1.10), expand = c(0,0)) +
+  scale_y_continuous(limits = c(0, 110), expand = c(0,0)) +
   theme_bw() +
   theme(
     text = element_text(size = 12),
@@ -188,17 +273,17 @@ overall_success_rate <- ggplot(success_rate_overall, aes(trial, rate)) +
 ```
 
 ```{r}
-by_group_success_rate <- ggplot(success_rate_by_group, aes(Group, rate, fill=trial)) +
+by_group_success_rate <- ggplot(success_rate_by_group, aes(Group, rate * 100, fill=trial)) +
   geom_bar(stat = 'identity', color='black', position = position_dodge()) +
   scale_fill_brewer() +
   guides(fill=guide_legend(title = '', title.position = 'bottom')) +
-  annotate('text', x = 1.25, y =1.05, label=ifelse(fisher_attendings_success_rate$p.value < 0.05, '*', ''), size=12/ggplot2:::.pt) +
-  annotate('text', x = 2.25, y = 1.05, label=ifelse(fisher_residents_success_rate$p.value < 0.05, '*', ''), size=12/ggplot2:::.pt) +
+  annotate('text', x = 1.25, y =1.05 * 100, label=ifelse(fisher_attendings_success_rate$p.value < 0.05, '*', ''), size=12/ggplot2:::.pt) +
+  annotate('text', x = 2.25, y = 1.05 * 100, label=ifelse(fisher_residents_success_rate$p.value < 0.05, '*', ''), size=12/ggplot2:::.pt) +
   # facet_wrap(~Group) +
   xlab('Trial Number') +
   ylab('Trial success rate') +
   # facet_wrap(~Group) +
-  scale_y_continuous(limits = c(0, 1.10), expand = c(0,0)) +
+  scale_y_continuous(limits = c(0, 1.10 * 100), expand = c(0,0)) +
   theme_bw() +
   theme(
     text = element_text(size = 12),
@@ -513,6 +598,28 @@ ebl_test_test_values_by_group <- ebl_data %>%
 <!-- ## EBL vs. TTH colored by trial -->
 
 ```{r}
+# We need this data for multipl plots
+most_improved_data <- raw_data %>%
+  dplyr::select(SurveyID, Group, tth_columns, `Trial 1 Success`, `Trial 2 Success`) %>%
+  gather(var, value, -SurveyID, -Group, -`Trial 1 Success`, -`Trial 2 Success`) %>%
+  mutate(trial = gsub(' TTH', '', var)) %>%
+  mutate(trial=factor(trial, c('Trial 1', 'Trial 2', 'Trial 3'))) %>%
+  filter(`Trial 1 Success` == 0, `Trial 2 Success` == 1) %>%
+  dplyr::rename(tth=value) %>%
+  left_join(., 
+    raw_data %>%
+      dplyr::select(SurveyID, Group, `Trial 1 Success`, `Trial 2 Success`, ebl_columns) %>%
+      magrittr::set_colnames(gsub('  ', ' ', colnames(.))) %>%
+      gather(var, value, -SurveyID, -Group, -`Trial 1 Success`, -`Trial 2 Success`) %>%
+      mutate(trial = gsub(' ebl', '', var)) %>%
+      mutate(trial=factor(gsub('^t', 'T', trial), c('Trial 1', 'Trial 2', 'Trial 3'))) %>%
+      filter(`Trial 1 Success` == 0, `Trial 2 Success` == 1) %>%
+      dplyr::select(SurveyID, trial, ebl=value),
+    by = c('SurveyID', 'trial')
+  )
+```
+
+```{r}
 scatter_ebl_tth <- raw_data %>% 
   dplyr::select(SurveyID, Group, `Trial 1 TTH`, `Trial 2 TTH`, `trial 1 ebl`, `trial 2 ebl`) %>%
   gather(var, value, -SurveyID, -Group) %>%
@@ -530,17 +637,19 @@ ordered_survey_id <- change_in_scores %>%
   SurveyID
 
 change_in_scores %<>% mutate(SurveyID = factor(SurveyID, levels=ordered_survey_id))
+change_in_scores %<>% mutate(MI=ifelse(SurveyID %in% most_improved_data$SurveyID, 'Training Rescue', NA))
 ```
 
 ```{r}
 # Maybe highlight (with grey in the background) for the ones that improved (right lower quadrant, highlight in red for example)
-tth_change_overall <- ggplot(change_in_scores, aes(SurveyID, change_in_tth, color=Group)) +
-  geom_segment(aes(x = SurveyID, xend=SurveyID, y = 0, yend = change_in_tth)) +
-  geom_point() +
-  guides(color=guide_legend(title = NA, title.position = 'bottom')) +
-  scale_color_jama() +
+tth_change_overall <- ggplot(change_in_scores, aes(SurveyID, change_in_tth)) +
+  geom_segment(aes(x = SurveyID, xend=SurveyID, y = 0, yend = change_in_tth), color='grey', alpha=0.75) +
+  geom_point(color='black') +
+  # guides(color=guide_legend(title = NA, title.position = 'bottom')) +
+  # scale_color_manual(values=pal_jama("default")(1), na.value=pal_jama("default")(7)[2], breaks=c('Training Rescue')) +
   xlab('Individual ranked by improvement based on TTH change') +
   ylab('TTH seconds saved (Trial 1 vs. Trial 2)') +
+  scale_x_discrete(expand=c(0.01, 0.01)) +
   theme_bw() +
   theme(
     legend.position = c(0.01,0.99),
@@ -550,20 +659,25 @@ tth_change_overall <- ggplot(change_in_scores, aes(SurveyID, change_in_tth, colo
     legend.title = element_blank(),
     axis.text.x = element_blank(),
     axis.ticks.x = element_blank(),
-    axis.title.x = element_blank(),
+    # axis.title.x = element_blank(),
     panel.grid.major.x = element_blank(),
     panel.grid.minor.x = element_blank()
   )
 ```
 
 ```{r}
+ggsave( , filename = file.path(plot_dir, 'tth_change_overall.png'), width = 8, height = 5)
+```
+
+```{r}
 # Maybe highlight (with grey in the background) for the ones that improved (right lower quadrant, highlight in red for example)
-ebl_change_overall <- ggplot(change_in_scores, aes(SurveyID, change_in_ebl, color=Group)) +
+ebl_self_ranked <- change_in_scores %>% arrange(change_in_ebl) %$% SurveyID
+ebl_change_overall <- ggplot(change_in_scores %>% mutate(SurveyID = factor(SurveyID, levels=ebl_self_ranked)), aes(SurveyID, change_in_ebl, color=MI)) +
   geom_segment(aes(x = SurveyID, xend=SurveyID, y = 0, yend = change_in_ebl)) +
   geom_point() +
   guides(color=guide_legend(title = NA, title.position = 'bottom')) +
-  scale_color_jama() +
-  xlab('Individual ranked by improvement based on TTH change') +
+  scale_color_manual(values=pal_jama("default")(1), na.value=pal_jama("default")(7)[2], breaks=c('Training Rescue')) +
+  xlab('Individual ranked by improvement based on EBL change') +
   ylab('EBL (mL) saved (Trial 1 vs. Trial 2)') +
   theme_bw() +
   theme(
@@ -575,7 +689,7 @@ ebl_change_overall <- ggplot(change_in_scores, aes(SurveyID, change_in_ebl, colo
     legend.title = element_blank(),
     axis.text.x = element_blank(),
     axis.ticks.x = element_blank(),
-    axis.title.x = element_blank(),
+    # axis.title.x = element_blank(),
     panel.grid.major.x = element_blank(),
     panel.grid.minor.x = element_blank()
   )
@@ -612,7 +726,7 @@ percent_change_in_scores_plot_on_single <- ggplot(percent_change_in_scores, aes(
     legend.title = element_blank(),
     axis.text.x = element_blank(),
     axis.ticks.x = element_blank(),
-    axis.title.x = element_blank(),
+    # axis.title.x = element_blank(),
     axis.title.y = element_text(size=12),
     panel.grid.major.x = element_blank(),
     panel.grid.minor.x = element_blank()
@@ -635,7 +749,7 @@ percent_change_overall_tth_plot <- ggplot(percent_change_in_scores %>% filter(s=
     legend.title = element_blank(),
     axis.text.x = element_blank(),
     axis.ticks.x = element_blank(),
-    axis.title.x = element_blank(),
+    # axis.title.x = element_blank(),
     axis.title.y = element_text(size=12),
     panel.grid.major.x = element_blank(),
     panel.grid.minor.x = element_blank()
@@ -647,7 +761,7 @@ percent_change_overall_ebl_plot <- ggplot(percent_change_in_scores %>% filter(s=
   guides(color=guide_legend(title = NA, title.position = 'bottom')) +
   scale_color_jama() +
   # scale_color_manual(values=c('grey', 'black')) +
-  xlab('Individual ranked by improvement based on % TTH improvement') +
+  xlab('Individual ranked by improvement based on % EBL improvement') +
   ylab('% improvement') +
   theme_bw() +
   theme(
@@ -665,86 +779,10 @@ percent_change_overall_ebl_plot <- ggplot(percent_change_in_scores %>% filter(s=
   )
 ```
 
-```{r}
-ggplot(change_in_scores, aes(color=Group)) +
-  geom_segment(aes(x = SurveyID, xend=SurveyID, y = TTH_1, yend = TTH_2)) +
-  geom_point(aes(x=SurveyID, y= TTH_1), color = 'blue') +
-  geom_point(aes(x=SurveyID, y= TTH_2), color='red') +
-  xlab('Individual ranked by improvement based on TTH change') +
-  ylab('TTH seconds saved (Trial 1 vs. Trial 2)') +
-  theme_bw() +
-  theme(
-    # legend.position = c(0.01,0.99),
-    # legend.justification = c(0,1),
-    axis.text.x = element_blank(),
-    axis.ticks.x = element_blank()
-  )
-```
-
-```{r}
-ggplot(change_in_scores, aes(color=Group)) +
-  geom_segment(aes(x = SurveyID, xend=SurveyID, y = TTH_1, yend = TTH_2)) +
-  geom_point(aes(x=SurveyID, y= TTH_1), color = 'blue') +
-  geom_point(aes(x=SurveyID, y= TTH_2), color='red') +
-  xlab('Individual ranked by improvement based on TTH change') +
-  ylab('TTH seconds saved (Trial 1 vs. Trial 2)') +
-  theme_bw() +
-  theme(
-    # legend.position = c(0.01,0.99),
-    # legend.justification = c(0,1),
-    axis.text.x = element_blank(),
-    axis.ticks.x = element_blank()
-  )
-```
-
-```{r}
-ggplot(scatter_ebl_tth %>% mutate(SurveyID = factor(SurveyID, levels = ordered_survey_id)), aes(SurveyID, TTH, fill = trial)) +
-  geom_bar(stat = 'identity', position = position_dodge()) +
-  # geom_bar(stat='identity', alpha = 0.5) +
-  ylab('EBL mL saved (Trial 1 vs. Trial 2)') +
-  theme_bw() +
-  theme(
-    axis.text.x = element_blank(),
-    axis.ticks.x = element_blank()
-  )
-```
-
-```{r}
-scatter_plot_attempt <- ggplot(scatter_ebl_tth, aes(TTH, ebl, color=trial)) +
-  geom_point() +
-  # geom_segment(data=change_in_scores, 
-    # aes(x = TTH_1, xend=TTH_2, y = ebl_1, yend = ebl_2), color='grey', alpha = 0.5) +
-  # geom_smooth(method = 'lm') +
-  # geom_density2d() +
-  scale_x_log10() +
-  scale_y_log10() +
-  # facet_wrap(~Group) +
-  theme_bw()
-
-ggsave(scatter_plot_attempt, filename = file.path(plot_dir, 'scatter_plot.pdf'), width = 5, height = 5, device='pdf')
-```
-
 <!-- ## Most improved -->
 
 ```{r include=FALSE}
-most_improved_data <- raw_data %>%
-  dplyr::select(SurveyID, Group, tth_columns, `Trial 1 Success`, `Trial 2 Success`) %>%
-  gather(var, value, -SurveyID, -Group, -`Trial 1 Success`, -`Trial 2 Success`) %>%
-  mutate(trial = gsub(' TTH', '', var)) %>%
-  mutate(trial=factor(trial, c('Trial 1', 'Trial 2', 'Trial 3'))) %>%
-  filter(`Trial 1 Success` == 0, `Trial 2 Success` == 1) %>%
-  dplyr::rename(tth=value) %>%
-  left_join(., 
-    raw_data %>%
-      dplyr::select(SurveyID, Group, `Trial 1 Success`, `Trial 2 Success`, ebl_columns) %>%
-      magrittr::set_colnames(gsub('  ', ' ', colnames(.))) %>%
-      gather(var, value, -SurveyID, -Group, -`Trial 1 Success`, -`Trial 2 Success`) %>%
-      mutate(trial = gsub(' ebl', '', var)) %>%
-      mutate(trial=factor(gsub('^t', 'T', trial), c('Trial 1', 'Trial 2', 'Trial 3'))) %>%
-      filter(`Trial 1 Success` == 0, `Trial 2 Success` == 1) %>%
-      dplyr::select(SurveyID, trial, ebl=value),
-    by = c('SurveyID', 'trial')
-  )
+## The df is made above
 
 types_most_improved <- most_improved_data %>%
   distinct(SurveyID, Group) %>%
@@ -989,6 +1027,31 @@ quartile_success_stat_prep[is.na(quartile_success_stat_prep)] <- 0
 quartile_success_stat <- fisher.test(quartile_success_stat_prep[,c('Trial 1', 'Trial 2')])
 ```
 
+```{r}
+quartiles_all_miq <- change_in_scores %$% quantile(change_in_tth, na.rm=T, c(0.25, 0.5, 0.75, 1.00))
+
+change_in_scores %<>%
+  mutate(quart=case_when(
+    change_in_tth <= quartiles_all_miq[1] ~ 'Q1',
+    change_in_tth <= quartiles_all_miq[2] ~ 'Q2',
+    change_in_tth <= quartiles_all_miq[3] ~ 'Q3',
+    change_in_tth <= quartiles_all_miq[4] ~ 'Q4',
+    TRUE ~ 'None'
+  ))
+
+quartiles_plotting <- change_in_scores %>%
+  dplyr::select(SurveyID, Group, quart, TTH_1, TTH_2, change_in_tth) %>%
+  gather(var, val, -SurveyID, -Group, -quart, -change_in_tth)
+
+miq_box_plot <- ggplot(quartiles_plotting %>% filter(quart != 'None'), aes(quart, val, color=var)) +
+  geom_boxplot(alpha=0.5, fill='grey', outlier.shape = NA) +
+  # geom_violin() +
+  # geom_sina()
+  geom_point(position = position_jitterdodge())
+
+ggsave(miq_box_plot, filename = file.path(plot_dir, 'miq_box_plot.png'), width = 8, height = 5, device='png')
+```
+
 <!-- ## Changes in Heart Rate -->
 
 <!-- The plot below compares the average and peak heart rates at different points in the trials. -->
@@ -1131,7 +1194,9 @@ heart_rate_average_plot <- ggplot(heart_rate_data_bar %>% filter(value_type=='Av
   )
 
 heart_rate_average_plot
+```
 
+```{r}
 heart_rate_peak_plot <- ggplot(heart_rate_data_bar %>% filter(value_type=='Peak'), aes(timing, m)) +
   geom_bar(stat = 'identity', color = 'black', alpha=0.5, fill='grey') +
   # geom_point(data = complete_heart_rate_data %>% filter(value_type=='Peak') %>% mutate(m=value), position = position_jitter()) +
@@ -1286,6 +1351,8 @@ coaching_tth_overall_plot <- ggplot(coaching_tth_data_bar, aes(trial, m, fill=tr
   )
 
 coaching_tth_overall_plot
+
+ggsave(coaching_tth_overall_plot, filename = file.path(plot_dir, 'coaching_tth_overall_plot.png'), width=8, height=5)
 ```
 
 ```{r include=FALSE}
@@ -1451,6 +1518,9 @@ coaching_success_rate <- ggplot(success_rate_coaching, aes(trial, rate)) +
   )
 
 coaching_success_rate
+
+ggsave(coaching_success_rate, filename = file.path(plot_dir, 'coaching_success_rate.png'), width=8, height=5)
+
 ```
 
 
@@ -1470,20 +1540,20 @@ figure1_bottom <- ggpubr::ggarrange(
 figure1_bottom2 <- ggpubr::ggarrange(
   percent_change_overall_tth_plot, percent_change_overall_ebl_plot, widths = c(1,1), labels=c('d', 'e')
 )
-ggsave(figure1_bottom2, width = 10, height = 5, units = 'in', filename = file.path(plot_dir, 'overall_performance_alt_bottom.pdf'), device = 'pdf')
+ggsave(figure1_bottom2, width = 10, height = 5, units = 'in', filename = file.path(plot_dir, 'overall_performance_alt_bottom.png'), device = 'png')
 
 figure1_bottom_combined <- ggpubr::ggarrange(
   percent_change_in_scores_plot_on_single, labels=c('d')
 )
 
-ggsave(figure1_bottom_combined, width = 10, height = 5, units = 'in', filename = file.path(plot_dir, 'overall_performance_alt_combined_bottom.pdf'), device = 'pdf')
+ggsave(figure1_bottom_combined, width = 10, height = 5, units = 'in', filename = file.path(plot_dir, 'overall_performance_alt_combined_bottom.png'), device = 'png')
 
 
 figure1 <- annotate_figure(ggpubr::ggarrange(
   figure1_top, figure1_bottom, heights = c(1,1.5), nrow = 2
-), bottom = text_grob('Individual ranked by improvement in TTH'))
+)) #bottom = text_grob('Individual ranked by improvement in TTH'))
 
-ggsave(figure1, width = 10, height = 8, units = 'in', filename = paste0(plot_dir, '/overall_performance.pdf'), device = 'pdf')
+ggsave(figure1, width = 10, height = 8, units = 'in', filename = paste0(plot_dir, '/overall_performance.png'), device = 'png')
 ```
 
 ```{r}
@@ -1634,7 +1704,7 @@ suppfigure1 <- ggpubr::ggarrange(
   nrow=1, labels=c("a", "b", "c"), widths = c(2,2,2), common.legend = T, legend = 'bottom'
 )
 
-ggsave(suppfigure1, width = 10, height = 4, units = 'in', filename = paste0(plot_dir, '/overall_performance_by_group.pdf'), device = 'pdf')
+ggsave(suppfigure1, width = 10, height = 4, units = 'in', filename = paste0(plot_dir, '/overall_performance_by_group.png'), device = 'png')
 # fig1_final <- annotate_figure(
 #   figure1,
 #   left = text_grob("Time to hemostasis", color = "black", rot = 90, size = 12)
@@ -1665,7 +1735,7 @@ figure2 <- ggpubr::ggarrange(
   nrow=1, labels=c("a", "b", "c"), widths = c(1, 1,1)
 )
 
-ggsave(figure2, width = 10, height = 5, units = 'in', filename = paste0(plot_dir, '/coaching_figure.pdf'), device = 'pdf')
+ggsave(figure2, width = 10, height = 5, units = 'in', filename = paste0(plot_dir, '/coaching_figure.png'), device = 'png')
 ```
 
 ```{r, include=T}
@@ -1699,7 +1769,7 @@ figure3 <- annotate_figure(ggpubr::ggarrange(
   figure3_top, figure3_bottom, heights = c(1,1.5), nrow = 2
 ), bottom = text_grob('Individual ranked by improvement in TTH'))
 
-ggsave(figure3, width = 10, height = 8, units = 'in', filename = paste0(plot_dir, '/trial_rescues.pdf'), device = 'pdf')
+ggsave(figure3, width = 10, height = 8, units = 'in', filename = paste0(plot_dir, '/trial_rescues.png'), device = 'png')
 ```
 
 ```{r include=TRUE, fig.height=8}
@@ -1715,7 +1785,7 @@ figure4 <- annotate_figure(
   ), left = text_grob('Beats per minute (BPM)', size = 12, rot = 90)
 )
 
-ggsave(figure4, width = 10, height = 5, units = 'in', filename = paste0(plot_dir, '/heart_rate.pdf'), device = 'pdf')
+ggsave(figure4, width = 10, height = 5, units = 'in', filename = paste0(plot_dir, '/heart_rate.png'), device = 'png')
 ```
 
 ```{r include=TRUE, fig.height=8}

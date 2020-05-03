@@ -1,0 +1,429 @@
+---
+title: "Carotid Sim Trial Consistency"
+author: "Guillaume Kugener"
+date: "4/25/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+source('~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/carotid_model/preprocess_data.R')
+
+plot_dir <- file.path(source_dir, 'plots')
+```
+
+## General demographics figure
+
+## Compare sites
+
+```{r}
+# Look at success rate across sites
+compare_sites_data <- raw_data %>% 
+  # dplyr::select(
+  #   SurveyID, Group, Source, 
+  #   `Start Date`,
+  #   `Trial 1 Success`, `Trial 2 Success`,
+  #   `Trial 1 TTH`, `Trial 2 TTH`,
+  #   `trial 1 ebl`, `trial 2 ebl`
+  # ) %>%
+  mutate(dd=format(as.Date(`Start Date`), format='%Y-%m')) %>%
+  mutate(SiteGroup=ifelse(is.na(dd), Source, paste0(Source, '_', dd))) %>%
+  mutate(SiteGroup2=case_when(
+    Source == 'Emory' ~ 'Emory',
+    grepl('[0-9][0-9]$', SurveyID) ~ paste0('USC', gsub('[0-9][0-9]$', '', SurveyID)),
+    SurveyID %in% c('314c', '320b') ~ 'USC3', 
+    TRUE ~ 'None'
+  )) %>% 
+  mutate(SiteGroup2=gsub('USCUSC1', 'USC120+', SiteGroup2))
+```
+
+```{r}
+# plot demographics by site
+confidence_values <- compare_sites_data %>%
+  dplyr::select(SurveyID, Group, SiteGroup2, generalconfidencepre, generalconfidencepost, carotidconfidencepre, carotidconfidencepost) %>%
+  gather(conf_var, conf_val, -SurveyID, -Group, -SiteGroup2) %>%
+  mutate(conf_var=factor(conf_var, levels=c('generalconfidencepre', 'generalconfidencepost', 'carotidconfidencepre', 'carotidconfidencepost')))
+
+ggplot(confidence_values, aes(conf_var, conf_val, color=SiteGroup2)) +
+  geom_boxplot(alpha=0.5)
+  # geom_sina() +
+  # geom_violin()
+  # stat_compare_means(label = "p.signif", paired = T, na.rm = T)
+
+conf_tile_plot <- confidence_values %>%
+  filter(!is.na(conf_val)) %>%
+  group_by(SiteGroup2, conf_var, conf_val) %>% 
+  dplyr::summarise(count=n()) %>%
+  mutate(count=ifelse(is.na(count), 0, count)) %>%
+  group_by(SiteGroup2, conf_var) %>%
+  mutate(total=sum(count))
+
+ggplot(conf_tile_plot, aes(SiteGroup2, conf_val, fill=count/total)) +
+  # geom_boxplot(alpha=0.5) +
+  scale_fill_gradient(low='white', high='red') +
+  geom_tile() +
+  facet_wrap(~conf_var, nrow=1) + 
+  theme(panel.background=element_rect(fill="white", colour="black"))
+
+confidence_across_sites <- ggplot(conf_tile_plot, aes(SiteGroup2, count/total, fill=conf_val)) +
+  geom_bar(stat='identity') +
+  scale_fill_gradient2(low='blue', high='red', mid='white', midpoint=3) +
+  facet_wrap(~conf_var, ncol=2)
+
+ggsave(confidence_across_sites, filename = file.path(plot_dir, 'confidence_across_sites.png'), width=8, height=5)
+```
+
+```{r}
+aov(`Trial 1 Success` ~ SiteGroup2, data = compare_sites_data %>% filter(Group=='Attending')) %>% summary()
+aov(`Trial 1 TTH` ~ SiteGroup2, data = compare_sites_data %>% filter(Group=='Attending')) %>% summary()
+aov(`trial 1 ebl` ~ SiteGroup2, data = compare_sites_data %>% filter(Group=='Attending')) %>% summary()
+```
+
+```{r}
+ggplot(compare_sites_data, aes(SiteGroup2, `Trial 1 TTH`)) +
+  geom_boxplot() +
+  facet_wrap(~Group, ncol = 1)
+
+trial_success_by_site <- compare_sites_data %>%
+  mutate(T1S=case_when(
+      `Trial 1 Success`==0 ~ 'Fail', 
+      `Trial 1 Success`==1 ~ 'Success',
+      TRUE ~ 'None'),
+    T2S=case_when(
+      `Trial 2 Success`==0 ~ 'Fail', 
+      `Trial 2 Success`==1 ~ 'Success',
+      TRUE ~ 'None')
+  ) %>%
+  dplyr::select(SurveyID, Group, Source, SiteGroup2, T1S, T2S) %>%
+  gather(trial, value, -SurveyID, -Group, -Source, -SiteGroup2) %>%
+  filter(value != 'None') %>%
+  group_by(SiteGroup2, trial, value) %>%
+  dplyr::summarise(count=n()) %>%
+  group_by(SiteGroup2, trial) %>%
+  mutate(total=sum(count))
+
+# Add p values between all groups
+# Need to do a fishers between all of them
+fisher_sites_ps <- NULL
+for (si in unique(trial_success_by_site$SiteGroup2)) {
+  contig_table_sites <- trial_success_by_site %>% 
+    filter(SiteGroup2 == si) %>%
+    reshape2::dcast(trial ~ value, value.var='count') %>%
+    column_to_rownames(var = 'trial')
+  contig_table_sites[is.na(contig_table_sites)] <- 0
+  fisher_sites_ps %<>% rbind(data.frame(SiteGroup2=si, p=fisher.test(contig_table_sites)$p.value, stringsAsFactors = F))
+}
+
+fisher_sites_ps %<>% 
+  mutate(p_text=ifelse(p < 0.05, paste0('p=', round(p, 3)), 'ns')) %>% 
+  mutate(trial=NA)
+
+success_rate_with_ps <- ggplot(trial_success_by_site %>% filter(value=='Success'), aes(SiteGroup2, count/total*100, fill=trial)) +
+  geom_bar(stat = 'identity', position = position_dodge()) +
+  geom_text(data = fisher_sites_ps %>% mutate(y=105), aes(SiteGroup2, y, label = p_text)) +
+  ylab('Success rate') +
+  xlab('Site')
+
+ggsave(success_rate_with_ps, filename = file.path(plot_dir, 'success_rate_by_site.png'), width = 8, height = 5, device = 'png')
+
+success_rate_with_ps
+
+success_counts_with_ps <- ggplot(trial_success_by_site %>% filter(value=='Success'), aes(SiteGroup2, count, fill=trial)) +
+  # geom_bar(aes(SiteGroup2, total), stat = 'identity', position = position_dodge(), color='grey', alpha=0.5) +
+  geom_bar(stat = 'identity', position = position_dodge()) +
+  geom_text(data = fisher_sites_ps %>% mutate(y=35), aes(SiteGroup2, y, label = p_text)) +
+  ylab('Number successful trials') +
+  xlab('Site')
+
+ggsave(success_counts_with_ps, filename = file.path(plot_dir, 'success_counts_by_site.png'), width = 8, height = 5, device = 'png')
+
+success_counts_with_ps
+```
+
+```{r}
+trial_tth_by_site <- compare_sites_data %>%
+  mutate(T1S=case_when(
+      `Trial 1 Success`==0 ~ 'Fail', 
+      `Trial 1 Success`==1 ~ 'Success',
+      TRUE ~ 'None'),
+    T2S=case_when(
+      `Trial 2 Success`==0 ~ 'Fail', 
+      `Trial 2 Success`==1 ~ 'Success',
+      TRUE ~ 'None')
+  ) %>%
+  dplyr::select(SurveyID, Group, Source, SiteGroup2, `Trial 1 TTH`, `Trial 2 TTH`) %>%
+  filter(!is.na( `Trial 2 TTH`)) %>%
+  gather(trial, value, -SurveyID, -Group, -Source, -SiteGroup2)
+
+tth_by_site_final <- ggplot(trial_tth_by_site, aes(SiteGroup2, value, color=trial)) +
+  geom_boxplot(fill='grey', alpha=0.5, outlier.shape=NA) +
+  # geom_point(position = position_jitterdodge()) +
+  geom_sina() +
+  stat_compare_means(aes(group = trial), label = "p.signif", paired = T) +
+  ylab('TTH') + xlab('Site')
+
+tth_by_site_final
+
+ggsave(tth_by_site_final, filename = file.path(plot_dir, 'tth_by_site_final.png'), width = 8, height = 5)
+```
+
+```{r}
+trial_ebl_by_site <- compare_sites_data %>%
+  mutate(T1S=case_when(
+      `Trial 1 Success`==0 ~ 'Fail', 
+      `Trial 1 Success`==1 ~ 'Success',
+      TRUE ~ 'None'),
+    T2S=case_when(
+      `Trial 2 Success`==0 ~ 'Fail', 
+      `Trial 2 Success`==1 ~ 'Success',
+      TRUE ~ 'None')
+  ) %>%
+  dplyr::select(SurveyID, Group, Source, SiteGroup2, `trial 1 ebl`, `trial 2 ebl`) %>%
+  filter(!is.na( `trial 2 ebl`)) %>%
+  gather(trial, value, -SurveyID, -Group, -Source, -SiteGroup2)
+
+ebl_by_site_final <- ggplot(trial_ebl_by_site, aes(SiteGroup2, value, color=trial)) +
+  geom_boxplot(fill='grey', alpha=0.5, outlier.shape=NA) +
+  # geom_point(position = position_jitterdodge()) +
+  geom_sina() +
+  stat_compare_means(aes(group = trial), label = "p.signif", paired = T) +
+  ylab('EBL') + xlab('Site')
+
+ebl_by_site_final
+
+ggsave(ebl_by_site_final, filename = file.path(plot_dir, 'ebl_by_site_final.png'), width = 8, height = 5)
+```
+
+```{r eval=FALSE}
+attendings_trial_across_sites <- ggplot(trial_success_by_site %>% 
+         filter(T1S=='Success', Group=='Attending') %>% 
+         group_by(SiteGroup2) %>% 
+         dplyr::summarise(co=sum(count)/sum(total)*100), 
+       aes(SiteGroup2, co)) +
+  geom_bar(stat = 'identity') +
+  ylab('Percent success trial 1 (attendings only)') +
+  scale_y_continuous(limits = c(0, 100))
+
+ggsave(attendings_trial_across_sites, filename=file.path(plot_dir, 'success_across_sites.png'), width = 8, height = 5, device = 'png')
+```
+
+## Attending trial 1 vs. trainee trial 2.
+
+We want to see how comparable these are. Are trainees with some training able to perform just as well as attendings with no training?
+
+```{r}
+a1_t2_data <- raw_data %>%
+  dplyr::select(
+    SurveyID, Group, Source, 
+     `Trial 1 Success`, `Trial 2 Success`,
+    `Trial 1 TTH`, `Trial 2 TTH`,
+    `trial 1 ebl`, `trial 2 ebl`
+  ) %>%
+  gather(var, value, -SurveyID, -Group, -Source) %>%
+  mutate(
+    trial=as.numeric(stringr::str_extract(pattern='[0-9]+', string=var)),
+    variable = stringr::str_extract(pattern='ebl|TTH|Success', string=var)
+  ) %>%
+  filter((Group=='Trainee' & trial == 2) | (Group == 'Attending' & trial == 1)) %>%
+  reshape2::dcast(SurveyID + Group + Source + trial ~ variable, value.var='value')
+```
+
+```{r}
+# Compare success 
+compare_success_a1_t2 <- a1_t2_data %>%
+  dplyr::select(SurveyID, Group, trial, Success) %>%
+  filter(!is.na(Success)) %>%
+  group_by(Group, Success) %>%
+  dplyr::summarise(count=n()) %>%
+  mutate(Success==case_when(
+      Success==0 ~ 'Fail', 
+      Success==1 ~ 'Success',
+      TRUE ~ 'None')
+  ) %>%
+  reshape2::dcast(Group ~ Success, value.var='count')
+
+# Looks like trainees on trial 2 are actually better than attendings on trial 1 -> this supports the point
+compare_success_a1_t2 %>%
+  column_to_rownames(var='Group') %>%
+  fisher.test()
+
+compare_success_a1_t2_plot <- a1_t2_data %>%
+  mutate(G2=paste0(Group, ', Trial ', trial)) %>%
+  group_by(G2) %>%
+  dplyr::summarise(count=n(), succeeded=sum(Success))
+
+a1_t2_plot <- ggplot(compare_success_a1_t2_plot, aes(G2, succeeded/count*100)) +
+  geom_bar(stat='identity', color='black', alpha=0.5, fill='grey') +
+  ylab('Success rate') +
+  scale_y_continuous(expand=c(0,0), limits=c(0, 105))
+
+a1_t2_plot
+
+ggsave(a1_t2_plot, filename = file.path(plot_dir, 'success_attending_t1_vs_trainee_t2.png'), width = 8, height = 5)
+```
+
+```{r}
+## Trainees are better in trial 2 than attendings in trial 1 when using TTH as mesaurement. No significant change when using EBL
+t.test(
+  a1_t2_data %>% filter(Group=='Trainee') %$% ebl,
+  a1_t2_data %>% filter(Group=='Attending') %$% ebl,
+  paired = F
+)
+
+tth_a1_t2_plot <- ggplot(a1_t2_data, aes(Group, TTH)) +
+  geom_boxplot(color='black', alpha=0.5, fill='grey') +
+  ylab('TTH')
+
+ggsave(tth_a1_t2_plot, filename = file.path(plot_dir, 'tth_attending_t1_vs_trainee_t2.png'), width = 8, height = 5)
+
+ebl_a1_t2_plot <- ggplot(a1_t2_data, aes(Group, ebl)) +
+  geom_boxplot(color='black', alpha=0.5, fill='grey') +
+  ylab('EBL')
+
+ggsave(ebl_a1_t2_plot, filename = file.path(plot_dir, 'ebl_attending_t1_vs_trainee_t2.png'), width = 8, height = 5)
+```
+
+## Endoscopic cases over last year vs. perfromance (TTH, EBL, trial success). 
+
+Look in all and only attendings.
+
+```{r}
+endolast12mo_data <- raw_data %>% 
+  dplyr::select(
+    SurveyID, Group, Source, 
+    `Trial 1 Success`, `Trial 2 Success`,
+    `Trial 1 TTH`, `Trial 2 TTH`,
+    `trial 1 ebl`, `trial 2 ebl`,
+    endolast12mo
+  ) %>% filter(!is.na(endolast12mo)) %>%
+  mutate(
+    T1S=case_when(
+      `Trial 1 Success`==0 ~ 'Fail', 
+      `Trial 1 Success`==1 ~ 'Success',
+      TRUE ~ 'None'),
+    T2S=case_when(
+      `Trial 2 Success`==0 ~ 'Fail', 
+      `Trial 2 Success`==1 ~ 'Success',
+      TRUE ~ 'None')
+  )
+```
+
+```{r}
+t1s_endo_t_val_plot <- t.test(
+  endolast12mo_data %>% filter(T1S=='Fail') %$% endolast12mo,
+  endolast12mo_data %>% filter(T1S=='Success') %$% endolast12mo,
+  paired = F
+)$p.value
+
+ggplot(endolast12mo_data, aes(T1S, (endolast12mo))) +
+  geom_boxplot() +
+  xlab('Trial 1 success') +
+  ylab('Endoscopic cases last 12 months') +
+  annotate(geom = 'text', x=2, y = 200, label=paste0('p=', round(t1s_endo_t_val_plot, 2)))
+```
+
+```{r}
+t2s_endo_t_val_plot <- t.test(
+  endolast12mo_data %>% filter(T2S=='Fail') %$% endolast12mo,
+  endolast12mo_data %>% filter(T2S=='Success') %$% endolast12mo,
+  paired = F
+)$p.value
+
+ggplot(endolast12mo_data %>% filter(!is.na(T2S)), aes(T2S, (endolast12mo))) +
+  geom_boxplot() +
+  xlab('Trial 2 success') +
+  ylab('Endoscopic cases last 12 months') +
+  annotate(geom = 'text', x=2, y = 200, label=paste0('p=', round(t2s_endo_t_val_plot, 2)))
+```
+Same as above but now looking in attendings only
+
+```{r}
+attending_t1s_endo_t_val_plot <- t.test(
+  endolast12mo_data %>% filter(Group=='Attending', T1S=='Fail') %$% endolast12mo,
+  endolast12mo_data %>% filter(Group=='Attending', T1S=='Success') %$% endolast12mo,
+  paired = F
+)$p.value
+
+ggplot(endolast12mo_data %>% filter(Group=='Attending'), aes(T1S, (endolast12mo))) +
+  geom_boxplot() +
+  xlab('Trial 1 success') +
+  ylab('Endoscopic cases last 12 months') +
+  annotate(geom = 'text', x=2, y = 200, label=paste0('p=', round(attending_t1s_endo_t_val_plot, 2)))
+```
+
+```{r}
+attending_t2s_endo_t_val_plot <- t.test(
+  endolast12mo_data %>% filter(Group=='Attending', T2S=='Fail') %$% endolast12mo,
+  endolast12mo_data %>% filter(Group=='Attending', T2S=='Success') %$% endolast12mo,
+  paired = F
+)$p.value
+
+ggplot(endolast12mo_data %>% filter(!is.na(T2S), Group=='Attending'), aes(T2S, (endolast12mo))) +
+  geom_boxplot() +
+  xlab('Trial 2 success') +
+  ylab('Endoscopic cases last 12 months') +
+  annotate(geom = 'text', x=2, y = 200, label=paste0('p=', round(attending_t2s_endo_t_val_plot, 2)))
+```
+
+## Length of training vs. success rate
+
+```{r}
+attendings_with_training_years <- raw_data %>%
+    dplyr::select(
+    SurveyID, Group, Source, 
+    `Trial 1 Success`, `Trial 2 Success`,
+    `Trial 1 TTH`, `Trial 2 TTH`,
+    `trial 1 ebl`, `trial 2 ebl`,
+    endolast12mo, Totyears, Attyears, Resyears
+  ) %>% filter(Group=='Attending', !is.na(Totyears) | !is.na(Attyears) | !is.na(Resyears)) %>%
+  # For Emory, I think total years for attendings is attyears in the main dataset
+  mutate(Attyears=ifelse(Source=='Emory', Totyears, Attyears)) %>%
+  filter(!is.na(Attyears)) %>%
+  mutate(
+    T1S=case_when(
+      `Trial 1 Success`==0 ~ 'Fail', 
+      `Trial 1 Success`==1 ~ 'Success',
+      TRUE ~ 'None'),
+    T2S=case_when(
+      `Trial 2 Success`==0 ~ 'Fail', 
+      `Trial 2 Success`==1 ~ 'Success',
+      TRUE ~ 'None')
+  )
+```
+
+```{r}
+attending_t1s_years_t_val_plot <- t.test(
+  attendings_with_training_years %>% filter(Group=='Attending', T1S=='Fail') %$% Attyears,
+  attendings_with_training_years %>% filter(Group=='Attending', T1S=='Success') %$% Attyears,
+  paired = F
+)$p.value
+
+ggplot(attendings_with_training_years, aes(T1S, Attyears)) +
+  geom_boxplot() +
+  xlab('Trial 1 success') +
+  ylab('Years as an attending') +
+  annotate(geom = 'text', x=2, y = 40, label=paste0('p=', round(attending_t1s_years_t_val_plot, 2)))
+```
+
+```{r}
+attending_t2s_years_t_val_plot <- t.test(
+  attendings_with_training_years %>% filter(Group=='Attending', T2S=='Fail') %$% Attyears,
+  attendings_with_training_years %>% filter(Group=='Attending', T2S=='Success') %$% Attyears,
+  paired = F
+)$p.value
+
+ggplot(attendings_with_training_years %>% filter(!is.na(T2S)), aes(T2S, Attyears)) +
+  geom_boxplot() +
+  xlab('Trial 2 success') +
+  ylab('Years as an attending') +
+  annotate(geom = 'text', x=2, y = 40, label=paste0('p=', round(attending_t2s_years_t_val_plot, 2)))
+```
+
+
+
+
+
+
+
+
+
