@@ -155,14 +155,6 @@ counts_by_individual <- tth_data %>%
 ```
 
 ```{r}
-tth_bar_plot_data <- tth_data %>% 
-  filter(trial != 'Trial 3') %>% 
-  mutate(Group='All') %>%
-  group_by(trial) %>%
-  dplyr::summarise(m=mean(value, na.rm = T), s=sd(value, na.rm = T)/sqrt(length(value[!is.na(value)])))
-```
-
-```{r}
 tth_overall_plot <- ggplot(tth_bar_plot_data, aes(trial, m, fill=trial)) +
   geom_bar(stat='identity', color='black', alpha = 1) +
   geom_errorbar(aes(ymin=m-s, ymax=m+s), width=0.2) +
@@ -209,6 +201,10 @@ second_row <- ggpubr::ggarrange(
 )
 ```
 
+```{r}
+change_in_scores %>% dim()
+change_in_scores %>% filter(change_in_ebl > 0) %>% dim()
+```
 
 ```{r}
 # Maybe highlight (with grey in the background) for the ones that improved (right lower quadrant, highlight in red for example)
