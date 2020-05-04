@@ -7,18 +7,20 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+library(pROC)
+library(plotROC)
 source('~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/carotid_model/preprocess_data.R')
 ```
 
 ```{r}
 confidence_value_order <- c(
   'Training level'='GroupTrainee',
-  'General confidence pre-trial'='generalconfidencepre', 'General confidence post-trial'='generalconfidencepost', 
-  'Carotid confidence pre-trial'='carotidconfidencepre', 'Carotid confidence post-trial'='carotidconfidencepost', 
+  'General\n confidence\npre-trial'='generalconfidencepre', 'General\nconfidence\npost-trial'='generalconfidencepost', 
+  'Carotid\nconfidence\npre-trial'='carotidconfidencepre', 'Carotid\nconfidence\npost-trial'='carotidconfidencepost', 
   'Specialty'='SpecialtyOtolaryngology',
-  'Prior real ICA'='priorreal', 'Prior simulation'='priorsim',
-  'Total years in training'='Totyears', 'Years as attending'='Attyears', 
-  'Endoscopic last 12 months'='endolast12mo', 'Cadaver last 12 months'='cadaverlast12'
+  'Prior\nreal ICA'='priorreal', 'Prior\nsimulation'='priorsim',
+  'Total years\nin training'='Totyears', 'Years as\nattending'='Attyears', 
+  'Endoscopic\nlast 12\nmonths'='endolast12mo', 'Cadaver\nlast 12\nmonths'='cadaverlast12'
 )
 
 # logistic regression - what predicts trial 1 success from a set of variables that we have
@@ -55,6 +57,9 @@ demographics_pred_logisit_data <- raw_data %>%
 dems_t1s_pred <- glm(`Trial 1 Success` ~ Attyears + Specialty + priorsim + priorreal + endolast12mo + cadaverlast12 + generalconfidencepre + carotidconfidencepre, data=demographics_pred_logisit_data, family = 'binomial')
 dems_t2s_pred <- glm(`Trial 2 Success` ~ Attyears + Specialty + priorsim + priorreal + endolast12mo + cadaverlast12 + generalconfidencepre + carotidconfidencepre, data=demographics_pred_logisit_data, family = 'binomial')
 
+nrow(demographics_pred_logisit_data) - (summary(dems_t1s_pred)$na.action %>% length())
+nrow(demographics_pred_logisit_data) - (summary(dems_t2s_pred)$na.action %>% length())
+
 # Train logistic regression
 dems_results_logit_data <- data.frame(
   coeff_names=names(coefficients(dems_t1s_pred)),
@@ -75,9 +80,22 @@ dems_results_logit_data <- data.frame(
 ```
 
 ```{r}
+# ANOVA success
+anova_t1s_pred <- aov(`Trial 1 Success` ~ generalconfidencepre + generalconfidencepost + carotidconfidencepre + carotidconfidencepost, data=pred_logisit_data)
+summary(anova_t1s_pred)
+
+anova_t2s_pred <- aov(`Trial 2 Success` ~ generalconfidencepre + generalconfidencepost + carotidconfidencepre + carotidconfidencepost, data=pred_logisit_data)
+summary(anova_t2s_pred)
+
+```
+
+```{r}
 # Confidence + group predictions
 t1s_pred <- glm(`Trial 1 Success` ~ generalconfidencepre + generalconfidencepost + carotidconfidencepre + carotidconfidencepost, data=pred_logisit_data, family = 'binomial')
 t2s_pred <- glm(`Trial 2 Success` ~ generalconfidencepre + generalconfidencepost + carotidconfidencepre + carotidconfidencepost, data=pred_logisit_data, family = 'binomial')
+
+nrow(pred_logisit_data) - (summary(t1s_pred)$na.action %>% length())
+nrow(pred_logisit_data) - (summary(t2s_pred)$na.action %>% length())
 
 # Train logistic regression
 results_logit_data <- data.frame(
@@ -99,6 +117,22 @@ results_logit_data <- data.frame(
 ```
 
 ```{r}
+demographics_pred_logisit_data$t1_pred <- predict(dems_t1s_pred,newdata = demographics_pred_logisit_data)
+demographics_pred_logisit_data$t2_pred <- predict(dems_t2s_pred,newdata = demographics_pred_logisit_data)
+
+ggplot() +
+  geom_roc(data = demographics_pred_logisit_data %>% 
+      filter(!is.na(`Trial 1 Success`)), 
+    aes(m = t1_pred, d = `Trial 1 Success`), 
+    n.cuts=20, labels=F, color=jama_colors[1]) +
+  geom_roc(data = demographics_pred_logisit_data %>% 
+      filter(!is.na(`Trial 2 Success`)), 
+    aes(m = t2_pred, d = `Trial 1 Success`), 
+    n.cuts=20, labels=F, color=jama_colors[2]) +
+  geom_abline(slope=1, linetype=2)
+```
+
+```{r}
 max_variable_value_across_logits_trials <- max(abs(dems_results_logit_data$c), abs(results_logit_data$c))
 ```
 
@@ -110,12 +144,13 @@ dems_trial_success_conf_multi <- ggplot(dems_results_logit_data, aes(coeff_names
   geom_bar(stat='identity', position=position_dodge()) + 
   geom_text(data = dems_results_logit_data %>%
       mutate(text=ifelse(p < 0.05, paste0('p=', round(p, 2)), 'ns'), y=max(abs(max_variable_value_across_logits_trials))*1.1),
-    aes(coeff_names, y, label=text, color=trial), size=12/ggplot2:::.pt, position = position_dodge(width=1)) +
+    aes(coeff_names, y, label=text, color=trial), size=12/ggplot2:::.pt, position = position_dodge(width=1), vjust=1) +
   guides(fill=guide_legend(title=NULL), color=FALSE) +
   scale_fill_jama() +
   scale_color_jama() +
-  xlab('Variable') + ylab('Model weight') +
+  xlab('Variable') + ylab('Trial success model weight') +
   scale_x_discrete(breaks=breaks_dems_trial_success_conf_multi, labels=names(breaks_dems_trial_success_conf_multi)) +
+  scale_y_continuous(expand=c(0, 0)) +
   # ggtitle('Multivariate prediction of trial success') +
   theme_bw() +
   theme(
@@ -123,6 +158,7 @@ dems_trial_success_conf_multi <- ggplot(dems_results_logit_data, aes(coeff_names
     legend.justification = 'left',
     legend.text = element_text(size=12),
     axis.text = element_text(size=12),
+    axis.text.x = element_text(size=10),
     axis.title = element_text(size=12),
     axis.title.x = element_blank()
   )
@@ -137,21 +173,23 @@ trial_success_conf_multi <- ggplot(results_logit_data, aes(coeff_names, abs(c), 
   geom_bar(stat='identity', position=position_dodge()) + 
   geom_text(data = results_logit_data %>%
       mutate(text=ifelse(p < 0.05, paste0('p=', round(p, 2)), 'ns'), y=max(max_variable_value_across_logits_trials)*1.1),
-    aes(coeff_names, y, label=text, color=trial), size=12/ggplot2:::.pt, position = position_dodge(width=1)) +
+    aes(coeff_names, y, label=text, color=trial), size=12/ggplot2:::.pt, position = position_dodge(width=1), vjust=1) +
   guides(fill=guide_legend(title=NULL), color=FALSE) +
   scale_fill_jama() +
   scale_color_jama() +
   # ggtitle('Multivariate prediction of trial success') +
   guides(fill=guide_legend(title=NULL)) +
-  xlab('Variable') + ylab('Model weight') +
-  scale_x_discrete(breaks=conf_breaks_trial_sucess_conf_multi, labels=names(conf_breaks_trial_sucess_conf_multi)) +
+  xlab('Variable') + ylab('Trial success model weight') +
+  scale_x_discrete(breaks=conf_breaks_trial_sucess_conf_multi, labels=names(conf_breaks_trial_sucess_conf_multi)) +       
+  scale_y_continuous(expand=c(0, 0)) +
   # ggtitle('Multivariate prediction of trial success') +
   theme_bw() +
   theme(
-    legend.position = 'top',
+    legend.position = 'none',
     legend.justification = 'left',
     legend.text = element_text(size=12),
     axis.text = element_text(size=12),
+    axis.text.x = element_text(size=10),
     axis.title = element_text(size=12),
     axis.title.x = element_blank()
   )
@@ -185,21 +223,23 @@ tth_success_conf_multi <- ggplot(tth_results_lm_data, aes(coeff_names, abs(c), f
   geom_bar(stat='identity', position=position_dodge()) + 
   geom_text(data = tth_results_lm_data %>%
       mutate(text=ifelse(p < 0.05, paste0('p=', round(p, 2)), 'ns'), y=max(abs(tth_results_lm_data$c))*1.1),
-    aes(coeff_names, y, label=text, color=trial), size=12/ggplot2:::.pt, position = position_dodge(width=1)) +
+    aes(coeff_names, y, label=text, color=trial), size=12/ggplot2:::.pt, position = position_dodge(width=1), vjust=1) +
   guides(fill=guide_legend(title=NULL), color=FALSE) +
   scale_fill_jama() +
   scale_color_jama() +
   # ggtitle('Multivariate prediction of TTH') +
   guides(fill=guide_legend(title=NULL)) +
-  xlab('Variable') + ylab('Model weight') +
+    xlab('Variable') + ylab('TTH Model weight') +
   scale_x_discrete(breaks=conf_breaks_trial_sucess_conf_multi, labels=names(conf_breaks_trial_sucess_conf_multi)) +
+  scale_y_continuous(expand=c(0, 0)) +
   # ggtitle('Multivariate prediction of trial success') +
   theme_bw() +
   theme(
-    legend.position = 'top',
-    legend.justification = 'left',
+    legend.position = 'none',
+    # legend.justification = 'left',
     legend.text = element_text(size=12),
     axis.text = element_text(size=12),
+    axis.text.x = element_text(size=10),
     axis.title = element_text(size=12),
     axis.title.x = element_blank()
   )
@@ -305,57 +345,63 @@ heart_rate_data_bar <- complete_heart_rate_data %>%
 ```
 
 ```{r}
-my_comparisons <- list( c("Baseline", "Trial 1"), c("Baseline", "Intertrial"), c("Intertrial", "Trial 2") )
+heart_comparisons <- list( c("Baseline", "Trial 1"), c("Baseline", "Intertrial"), c("Intertrial", "Trial 2"), c("Trial 1", "Trial 2"))
 jama_colors <- pal_jama("default")(7)
 
-ggplot(complete_heart_rate_data %>% filter(value_type=='Average'), aes(timing, value, color=timing)) +
-  geom_boxplot(outlier.shape = NA) +
-  geom_sina(alpha=0.5) +
-  geom_path(data=heart_rate_data_bar %>% filter(value_type == 'Average'), aes(timing, m, group=value_type), size=1.5, color='black') +
-  stat_compare_means(comparisons = my_comparisons, method = 't.test', paired = T, label = 'p.format') +
-  scale_color_manual(values=c('Baseline'='grey', 'Trial 1'=jama_colors[1], 'Intertrial'='grey', 'Trial 2'=jama_colors[2], 'Posttrial'='grey')) +
-  theme_bw() +
-  theme(
-    legend.position = 'none'
-  )
-```
-
-```{r}
-ggplot(complete_heart_rate_data %>% filter(value_type=='Average'), aes(timing, value, color=timing, fill=t)) +
+average_heart_rate_plot <- ggplot(complete_heart_rate_data %>% filter(value_type=='Average'), aes(timing, value, color=timing, fill=timing)) +
   # geom_boxplot(outlier.shape = NA) +
-  stat_summary(fun.y = mean, geom = 'bar', na.rm = T) +
-  geom_sina(alpha=0.5) +
+  stat_summary(fun.y = mean, geom = 'bar', na.rm = T, color='black', alpha=0.5) +
+  stat_summary(fun.data=mean_se, geom = 'errorbar', color='black',width=0.2) +
+  # geom_sina(alpha=0.5) +
   geom_path(data=heart_rate_data_bar %>% filter(value_type == 'Average'), aes(timing, m, group=value_type), size=1.5, color='black') +
-  stat_compare_means(comparisons = my_comparisons, method = 't.test', paired = T, label = 'p.format') +
+  stat_compare_means(comparisons = heart_comparisons, 
+    method = 't.test', paired = T, label = 'p.format', 
+    label.y = c(110, 113, 119, 116), tip.length = 0.005) +
   scale_color_manual(values=c('Baseline'='grey', 'Trial 1'=jama_colors[1], 'Intertrial'='grey', 'Trial 2'=jama_colors[2], 'Posttrial'='grey')) +
+  scale_fill_manual(values=c('Baseline'='grey', 'Trial 1'=jama_colors[1], 'Intertrial'='grey', 'Trial 2'=jama_colors[2], 'Posttrial'='grey')) +
+  ylab('Average heart rate (beats/min)') +
+  coord_cartesian(ylim = c(85, 120)) +
   theme_bw() +
   theme(
-    legend.position = 'none'
+    legend.position = 'none',
+    axis.text = element_text(size=12),
+    axis.title = element_text(size=12),
+    axis.title.x = element_blank()
+  )
+
+peak_heart_rate_plot <- ggplot(complete_heart_rate_data %>% filter(value_type=='Peak'), aes(timing, value, color=timing, fill=timing)) +
+  # geom_boxplot(outlier.shape = NA) +
+  stat_summary(fun.y = mean, geom = 'bar', na.rm = T, color='black', alpha=0.5) +
+  stat_summary(fun.data=mean_se, geom = 'errorbar', color='black',width=0.2) +
+  # geom_sina(alpha=0.5) +
+  geom_path(data=heart_rate_data_bar %>% filter(value_type == 'Peak'), aes(timing, m, group=value_type), size=1.5, color='black') +
+  stat_compare_means(comparisons = heart_comparisons, 
+    method = 't.test', paired = T, label = 'p.format', 
+    label.y = c(110, 113, 119, 116), tip.length = 0.005) +
+  scale_color_manual(values=c('Baseline'='grey', 'Trial 1'=jama_colors[1], 'Intertrial'='grey', 'Trial 2'=jama_colors[2], 'Posttrial'='grey')) +
+  scale_fill_manual(values=c('Baseline'='grey', 'Trial 1'=jama_colors[1], 'Intertrial'='grey', 'Trial 2'=jama_colors[2], 'Posttrial'='grey')) +
+  ylab('Peak heart rate (beats/min)') +
+  coord_cartesian(ylim = c(85, 120)) +
+  theme_bw() +
+  theme(
+    legend.position = 'none',
+    axis.text = element_text(size=12),
+    axis.title = element_text(size=12),
+    axis.title.x = element_blank()
   )
 ```
 
 ```{r}
-heart_rate_average_plot <- ggplot(heart_rate_data_bar %>% filter(value_type=='Average'), aes(timing, m)) +
-  geom_bar(stat = 'identity', color = 'black', alpha=0.5, fill='grey') +
-  geom_errorbar(aes(ymin=m-s, ymax=m+s), width = 0.2) +
-  # geom_text(data = significance_hr %>% filter(value_type=='Average') %>% mutate(m=110), aes(timing, m, label=label), size=12/ggplot2:::.pt) +
-  # geom_point(position = position_jitter(width = 0.25)) +
-  # scale_fill_jama() +
-  coord_cartesian(ylim = c(80,110)) +
-  # facet_wrap(~Group) +
-  xlab('') +
-  ylab('') +
-  ggtitle('Average participant heart rate') +
-  theme_bw() +
-  theme(
-    text = element_text(size = 12),
-    axis.text = element_text(size=12),
-    # axis.title = element_text(size=12),
-    axis.title.x = element_blank(),
-    panel.grid.major.x = element_blank(),
-    legend.position = 'none',
-    strip.text = element_text(size = 12)
-  )
+figure4 <- ggpubr::ggarrange(
+  dems_trial_success_conf_multi,
+  ggpubr::ggarrange(
+    trial_success_conf_multi, tth_success_conf_multi, ncol=2, labels = c('b', 'c')
+  ),
+  ggpubr::ggarrange(
+    average_heart_rate_plot, peak_heart_rate_plot, ncol=2, labels = c('d', 'e')
+  ), nrow = 3, labels = c('a', '', '')
+)
 
-heart_rate_average_plot
+ggsave(figure4, filename = file.path(source_dir, 'figures', 'figure4.png'), width = 8, height = 10, units = 'in')
 ```
+
