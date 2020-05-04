@@ -172,7 +172,7 @@ coaching_mean_tth <- coaching_tth_data %>%
   dplyr::summarise(m=mean(value, na.rm = T))
 ```
 
-```{r}
+```{r eval=FALSE}
 coaching_comparisons <- list( c('Trial 1', 'Trial 2'), c('Trial 2', 'Trial 3'), c('Trial 1', 'Trial 3'))
 new_coaching_tth_overall_plot <- ggplot(coaching_tth_data, aes(trial, value, fill=trial)) +
   stat_summary(fun.y = mean, geom = 'bar', color='black', na.rm=T) +
@@ -199,7 +199,7 @@ new_coaching_tth_overall_plot <- ggplot(coaching_tth_data, aes(trial, value, fil
 new_coaching_tth_overall_plot
 ```
 
-```{r eval=FALSE}
+```{r}
 coaching_tth_data_bar <- coaching_tth_data %>%
   group_by(trial) %>%
   dplyr::summarise(m=mean(value, na.rm = T), s=sd(value, na.rm = T)/sqrt(length(value[!is.na(value)])))
