@@ -1,4 +1,5 @@
-import xml.etree.ElementTree as ET
+from lxml import etree
+
 import zipfile
 import os
 from math import floor, ceil
@@ -17,8 +18,9 @@ SurgicalVideoAnnotation
 This python class contains all of the objects within an annotation zip file generated through CVAT
 '''
 class SurgicalVideoAnnotation:
-    def __init__(self, file_path):
+    def __init__(self, file_path, trial_id=''):
         self.file_path = file_path
+        self.trial_id = trial_id
         
         # Because we are dealing with zips as download, we need to unzip, parse the xml, and then delete the file we extracted
         zf = zipfile.ZipFile(file_path, 'r')
@@ -26,7 +28,7 @@ class SurgicalVideoAnnotation:
         zf.extractall() # It's in current directory
         zf.close()
         
-        tree = ET.parse(dump_file_path)
+        tree = etree.parse(dump_file_path)
         self.xml = tree.getroot()
         self.total_frames = self.__get_total_frames()
         self.frames = [None] * self.total_frames
@@ -55,26 +57,33 @@ class SurgicalVideoAnnotation:
         # We want to have the id of the first frame and the index of the frame
         # Since not all videos start with any tools in view, it might not always be the first frame
         # in our annotations
+        frame_prefix = ''
         first_frame_index = -1
         frame_string_id_length = -1
+        
         for frame in self.xml.iter('image'):
             if empty_frame is None:
                 # Make the empty frame
-                empty_frame = SurgicalVideoFrame(frame)
+                empty_frame = SurgicalVideoFrame(frame, trial_id=self.trial_id)
                 empty_frame.tools = []
                 empty_frame.xml = None
             
-            current_frame = SurgicalVideoFrame(frame)
+            current_frame = SurgicalVideoFrame(frame, trial_id=self.trial_id)
             frames_with_tools_id[current_frame.get_id()] = current_frame
             
             # When we add all the frames, we want the naming and ids to be properly indexed
             if first_frame_index == -1:
+                fp = re.compile(".*frame")
+                frame_prefix = fp.search(current_frame.name).group(0)
+                
                 p = re.compile("[0-9]+")
                 # Set the name of the first frame
-                first_frame_name = p.search(current_frame.name).group(0)
+                print(current_frame.name)
+                first_frame_name = p.search(re.sub('.*frame', 'frame', current_frame.name)).group(0)
+                print(first_frame_name)
                 frame_string_id_length = len(first_frame_name)
                 first_frame_index = int(first_frame_name) - current_frame.get_id()
-
+        
         # Now that we have all of the frames that have tools in them, it is time to add all of the frames
         # to our list of frames in our object
         for fi in range(len(self.frames)):
@@ -89,9 +98,12 @@ class SurgicalVideoAnnotation:
                 while len(frame_id_name) < frame_string_id_length:
                     frame_id_name = '0' + frame_id_name
                 
-                new_empty_frame.name = 'frame_' + frame_id_name + '.jpeg'
+                new_empty_frame.name = frame_prefix + '_' + frame_id_name + '.jpeg'
                 
-                self.frames[fi] = new_empty_frame
+                self.frames[fi] = new_empty_frame  
+            
+            # Set the index for that frame    
+            self.frames[fi].set_index(fi)
                 
     # Returns a binary list whether a tool is present in each frame.
     # The list is in tuples: (frame_name, 0 or 1)
@@ -111,13 +123,15 @@ SurgicalVideoFrame
 This class represents a single frame of a video annotation of a surgical video
 '''
 class SurgicalVideoFrame:
-    def __init__(self, frame):
+    def __init__(self, frame, index=-1, trial_id=''):
+        self.trial_id = trial_id
         self.name = frame.attrib['name']
         self.id = int(frame.attrib['id'])
         self.xml = frame
         self.height = float(frame.attrib['height'])
         self.width = float(frame.attrib['width'])
         self.tools = []
+        self.index = index
         
         self.__build_object()
     
@@ -125,6 +139,9 @@ class SurgicalVideoFrame:
         
         for bt in self.xml.iter('box'):
             self.tools.append(SurgicalToolBoxed(bt))
+    
+    def set_index(self, ind):
+        self.index = ind
     
     def get_id(self):
         return self.id
@@ -216,7 +233,67 @@ class SurgicalVideoFrame:
             
             im_new = Image.fromarray(tool_im)
             im_new.save(os.path.join(image_save_path, self.name + '_' + t.get_type() + '.jpeg'),  "JPEG")
+    
+    # Create the appropriate XML data for this frame to work with tensorflow
+    # An example can be found here: https://github.com/experiencor/BCCD_Dataset/blob/master/BCCD/
+    def generate_frame_annotation_xml(self, destination, prefix=''):        
+        # create the file structure
+        annotation = etree.Element('annotation')
+        annotation.set('verified', 'no')
+        
+        frame_file_name = prefix + '_' + re.sub('.*/', '', self.name)
+        
+        folder = etree.SubElement(annotation, 'folder')
+        folder.text = 'images'
+        
+        filename = etree.SubElement(annotation, 'filename')
+        filename.text = frame_file_name
+        
+        path = etree.SubElement(annotation, 'path')
+        path.text = os.path.join(destination, frame_file_name)
+        
+        source = etree.SubElement(annotation, 'source')
+        
+        database = etree.SubElement(source, 'database')
+        database.text = 'Unknown'
+        
+        size = etree.SubElement(annotation, 'size')
+        for i in [['width', self.width], ['height', self.height], ['depth', 3]]:
+            ele = etree.SubElement(size, i[0])
+            ele.text = str(i[1])
             
+        segmented = etree.SubElement(annotation, 'segmented')
+        segmented.text = '0'
+        
+        for t in self.tools:
+            # We want to skip tools labelled as 'start'
+            if t.type == 'start':
+                continue
+                
+            # We want to break when a tool is labelled as unspecified and we should fix this in the annotations...
+            if t.type == '__undefined__':
+                print('Tool in frame ' + frame_file_name + ' (index: ' + str(self.index) + ') is __undefined__')
+                break
+            
+            
+            obj = etree.SubElement(annotation, 'object')
+            
+            for i in [['name', t.type], ['pose', 'Unspecified'], ['truncated', 0], ['difficult', 0]]:
+                n = etree.SubElement(obj, i[0])
+                n.text = str(i[1])
+            
+            bndbox = etree.SubElement(obj, 'bndbox')
+            for i in [
+                ['xmin', t.coordinates[0][0]], ['ymin', t.coordinates[0][1]], 
+                ['xmax', t.coordinates[1][0]], ['ymax', t.coordinates[1][1]]
+            ]:
+                bele = etree.SubElement(bndbox, i[0])
+                bele.text = str(i[1])
+            
+        # create a new XML file with the results
+        myfile = open(os.path.join(destination, re.sub('\\.jpeg', '.xml', frame_file_name)), "wb")
+        myfile.write(etree.tostring(annotation, pretty_print=True))
+
         
 '''
 SurgicalToolBoxed
