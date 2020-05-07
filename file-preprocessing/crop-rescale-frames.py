@@ -23,44 +23,42 @@ import time
 import matplotlib
 import matplotlib.pyplot as plt
 
-from skimage import data, color
-from skimage.transform import rescale, resize, downscale_local_mean
+import cv2
 
-import imageio
+SOURCE_DIR = sys.argv[1]
+OUTPUT_DIR = sys.argv[2]
+TRIAL_ID = sys.argv[3] # In case we want to combine all of the images into one directory
+IMG_SIZE = 200
 
-source_directory_of_frames = sys.argv[1]
-output_directory_for_rescaled_image = sys.argv[2]
-frame_prefix = sys.argv[3] # In case we want to combine all of the images into one directory
+DATA_DIR = os.path.join(SOURCE_DIR, TRIAL_ID)
 
-all_frames = os.listdir(source_directory_of_frames)
+all_frames = [i for i in os.listdir(DATA_DIR) if i != '.DS_Store']
+all_frames.sort()
+
 
 start_time = time.time()
-if not os.path.isdir(output_directory_for_rescaled_image):
-	os.mkdir(output_directory_for_rescaled_image)
+if not os.path.isdir(OUTPUT_DIR):
+	os.mkdir(OUTPUT_DIR)
 
 # Iterate through all of the images and process them
 frame_counter = 0
 for frame in all_frames:
-	if frame == '.DS_Store':
-		continue
 	if frame_counter % 1000 == 0:
 		print('Processed: ' + str(frame_counter) + '/' + str(len(all_frames)) + ' (' + str(ceil(time.time()-start_time)) + ')')
 	frame_counter += 1
 
-	image = imageio.imread(os.path.join(source_directory_of_frames, frame))
+	image = cv2.cvtColor(cv2.imread(os.path.join(DATA_DIR, frame)), cv2.COLOR_RGB2BGR)
 
 	# Get the image shape and determine how much to crop by
 	image_shape = image.shape
 	amount_to_crop_x = (image_shape[1]-image_shape[0])/3 # This appears to be good from testing for 1280 x 720 images
 
 	cropped_image = image[:, floor(amount_to_crop_x):ceil(image_shape[1] - amount_to_crop_x), :]
-
-	# Now we rescale the cropped image for our final image that we will be using
-	sf = 0.33
-	rescaled_image = resize(
-		cropped_image, 
-		(int(cropped_image.shape[0] * sf), int(cropped_image.shape[1]*sf))
-	)
+	resized_image = cv2.resize(cropped_image, (IMG_SIZE, IMG_SIZE))
 
 	# Save the final image
-	matplotlib.image.imsave(os.path.join(output_directory_for_rescaled_image, frame_prefix + '_' + frame), rescaled_image)
+	matplotlib.image.imsave(os.path.join(OUTPUT_DIR, TRIAL_ID + '_' + frame), resized_image)
+
+
+print(f"Cropping and scaling complete. Original dimensions were {str(image.shape)}. New dimensions are {str(resized_image.shape)}. Crop was from {str((floor(amount_to_crop_x), ceil(image_shape[1] - amount_to_crop_x)))}")
+
