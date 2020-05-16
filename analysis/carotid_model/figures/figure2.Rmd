@@ -124,29 +124,30 @@ quartile_success_stat <- fisher.test(quartile_success_stat_prep[,c('Trial 1', 'T
 ```
 
 ```{r}
-quartiles_all_miq <- change_in_scores %$% quantile(change_in_tth, na.rm=T, c(0.25, 0.5, 0.75, 1.00))
+quartiles_all_miq <- change_in_scores %$% quantile(change_in_ebl, na.rm=T, c(0.25, 0.5, 0.75, 1.00))
 
 change_in_scores %<>%
   mutate(quart=case_when(
-    change_in_tth <= quartiles_all_miq[1] ~ 'Q4',
-    change_in_tth <= quartiles_all_miq[2] ~ 'Q3',
-    change_in_tth <= quartiles_all_miq[3] ~ 'Q2',
-    change_in_tth <= quartiles_all_miq[4] ~ 'Q1',
+    change_in_ebl <= quartiles_all_miq[1] ~ 'Q4\nLeast\nImproved',
+    change_in_ebl <= quartiles_all_miq[2] ~ 'Q3',
+    change_in_ebl <= quartiles_all_miq[3] ~ 'Q2',
+    change_in_ebl <= quartiles_all_miq[4] ~ 'Q1\nMost\nImproved',
     TRUE ~ 'None'
   ))
 
 quartiles_plotting <- change_in_scores %>%
-  dplyr::select(SurveyID, Group, quart, TTH_1, TTH_2, change_in_tth) %>%
-  gather(var, val, -SurveyID, -Group, -quart, -change_in_tth) %>%
-  mutate(var=gsub('TTH_', 'Trial', var))
+  dplyr::select(SurveyID, Group, quart, ebl_1, ebl_2, change_in_ebl) %>%
+  gather(var, val, -SurveyID, -Group, -quart, -change_in_ebl) %>%
+  mutate(var=gsub('TTH_', 'Trial', var)) %>%
+  mutate(var=gsub('ebl_', 'Trial ', var))
 
 miq_box_plot <- ggplot(quartiles_plotting %>% filter(quart != 'None'), aes(quart, val, color=var)) +
-  geom_boxplot(alpha=0.5, outlier.shape = NA) +
+  # geom_boxplot(alpha=0.5, outlier.shape = NA) +
   guides(color=guide_legend(title=NULL)) +
   scale_color_jama() +
   scale_fill_jama() +
-  geom_point(position = position_jitterdodge(jitter.width = 0.3), size=2, alpha=0.75) +
-  xlab('Improvement Quartile') + ylab('Time to Hemostasis (sec)') +
+  geom_point(position = position_jitterdodge(jitter.width = 0.2), size=2, alpha=0.75) +
+  xlab('Improvement Quartile') + ylab('Estimated Blood Loss (mL)') +
   theme_bw() +
   theme(
     legend.position = 'top',

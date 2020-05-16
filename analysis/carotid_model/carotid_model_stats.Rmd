@@ -27,6 +27,53 @@ trainee_two_trials <- dim(raw_data %>% filter(Group=='Trainee'))[1]
 performed_three_trials <- dim(complete_data %>% filter(!is.na(`Trial 3 Start Time (hhmmss)`)))[1]
 ```
 
+```{r}
+# Table 3
+survey_responses_data <- raw_data %>%
+  # Will want to discuss how to appropriately handle that
+  filter(!is.na(carotidconfidencepre), !is.na(carotidconfidencepost)) %>% 
+  dplyr::select(
+    SurveyID, Group, 
+    carotidconfidencepre, carotidconfidencepost, 
+    `Trial 1 Success`, `Trial 2 Success`,
+    `Trial 1 TTH`, `Trial 2 TTH`,
+    `trial 1 ebl`, `trial 2 ebl`
+  )
+
+# No filtering
+table(raw_data$carotidconfidencepre)
+table(raw_data$carotidconfidencepost)
+
+# Post filtering
+table(survey_responses_data$carotidconfidencepre)
+table(survey_responses_data$carotidconfidencepost)
+
+survey_responses_data %>%
+  group_by(carotidconfidencepre, `Trial 1 Success`) %>%
+  dplyr::summarise(count=n()) %>%
+  ungroup() %>%
+  mutate(`Trial 1 Success`=ifelse(`Trial 1 Success`==1, 'S', 'F')) %>%
+  reshape2::dcast(carotidconfidencepre ~ `Trial 1 Success`, value.var='count') %>%
+  column_to_rownames(var='carotidconfidencepre') %>%
+  fisher.test()
+aov(`Trial 1 TTH` ~ carotidconfidencepre, data = survey_responses_data) %>% summary()
+aov(`trial 1 ebl` ~ carotidconfidencepre, data = survey_responses_data) %>% summary()
+
+
+survey_responses_data %>%
+  group_by(carotidconfidencepost, `Trial 2 Success`) %>%
+  filter(!is.na(`Trial 2 Success`)) %>%
+  dplyr::summarise(count=n()) %>%
+  ungroup() %>%
+  mutate(`Trial 2 Success`=ifelse(`Trial 2 Success`==1, 'S', 'F')) %>%
+  reshape2::dcast(carotidconfidencepost ~ `Trial 2 Success`, value.var='count') %>%
+  column_to_rownames(var='carotidconfidencepost') %>%
+  fisher.test()
+
+aov(`Trial 2 TTH` ~ carotidconfidencepost, data = survey_responses_data) %>% summary()
+aov(`trial 2 ebl` ~ carotidconfidencepost, data = survey_responses_data) %>% summary()
+```
+
 
 ```{r}
 survey_responses_data <- raw_data %>%
@@ -38,6 +85,8 @@ survey_responses_data <- raw_data %>%
     `Trial 1 TTH`, `Trial 2 TTH`,
     `trial 1 ebl`, `trial 2 ebl`
   )
+
+
 
 survey_responses_data %>%
   gather(s, v, -SurveyID, -Group) %>%
@@ -76,13 +125,18 @@ survey_responses_data %<>%
   )
 
 # Association between confidence and TTH
-# aov(`Trial 1 TTH` ~ carotidconfidencepre, data = survey_responses_data) %>% summary()
+aov(`Trial 1 TTH` ~ carotidconfidencepre, data = survey_responses_data) %>% summary()
+aov(`trial 1 ebl` ~ carotidconfidencepre, data = survey_responses_data) %>% summary()
 # aov(`Trial 1 TTH` ~ carotidconfidencepost, data = survey_responses_data) %>% summary()
 # aov(`Trial 1 TTH` ~ generalconfidencepre, data = survey_responses_data) %>% summary()
 # aov(`Trial 1 TTH` ~ generalconfidencepost, data = survey_responses_data) %>% summary()
 # 
 # aov(`Trial 2 TTH` ~ carotidconfidencepre, data = survey_responses_data) %>% summary()
-# aov(`Trial 2 TTH` ~ carotidconfidencepost, data = survey_responses_data) %>% summary()
+aov(`Trial 2 TTH` ~ carotidconfidencepost, data = survey_responses_data) %>% summary()
+aov(`trial 2 ebl` ~ carotidconfidencepost, data = survey_responses_data) %>% summary()
+
+
+survey_responses_data %>% dim()
 # aov(`Trial 2 TTH` ~ generalconfidencepre, data = survey_responses_data) %>% summary()
 # aov(`Trial 2 TTH` ~ generalconfidencepost, data = survey_responses_data) %>% summary()
 ```

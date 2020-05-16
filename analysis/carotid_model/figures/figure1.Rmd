@@ -65,9 +65,13 @@ tth_ebl_heatmap_t1 <- ggplot(scatter_ebl_tth %>% filter(trial == 1), aes(TTH, eb
   scale_y_continuous(expand = c(0, 0), limits=c(0, max(scatter_ebl_tth$ebl))) +
   ggtitle('Trial 1 EBL vs. TTH density') +
   xlab('Time to Hemostatis (sec)') + ylab('Estimated Blood Loss (mL)') +
+  facet_wrap(~Group, ncol=1) +
   theme(
-    axis.title = element_text(size = 12),
-    axis.text = element_text(size=12)
+    # axis.title = element_text(size = 12),
+    axis.text = element_text(size=12),
+    axis.title = element_blank(),
+    legend.position = 'none',
+    strip.text = element_text(size=12)
   )
 
 # TTH vs. EBL density heatmap
@@ -78,10 +82,24 @@ tth_ebl_heatmap_t2 <- ggplot(scatter_ebl_tth %>% filter(trial == 2), aes(TTH, eb
   scale_y_continuous(expand = c(0, 0), limits=c(0, max(scatter_ebl_tth$ebl))) +
   xlab('Time to Hemostatis (sec)') + ylab('Estimated Blood Loss (mL)') +
   ggtitle('Trial 2 EBL vs. TTH density') +
+  facet_wrap(~Group, ncol=1) +
   theme(
-    axis.title = element_text(size = 12),
-    axis.text = element_text(size=12)
+    # axis.title = element_text(size = 12),
+    axis.text = element_text(size=12),
+    axis.title = element_blank(),
+    legend.position = 'none',
+    strip.text = element_text(size=12)
   )
+```
+
+```{r}
+figure_1_density <- annotate_figure(ggpubr::ggarrange(
+  tth_ebl_heatmap_t1,
+  tth_ebl_heatmap_t2, 
+  ncol = 2, common.legend = TRUE, legend = 'right'
+), left = text_grob("Estimated Blood Loss (mL)", size = 12, rot = 90), bottom = text_grob("Time to Hemostasis (sec)", size=12))
+
+ggsave(figure_1_density, filename = file.path(plot_dir, 'figure_1_density.png'), width = 7 , height = 6, units = 'in')
 ```
 
 ```{r}

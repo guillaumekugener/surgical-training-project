@@ -94,12 +94,12 @@ ggsave(tth_success_conf_multi, filename = file.path(plot_dir, 'tth_conf_multi.pn
 ```
 
 ```{r}
-ebl_t1s_pred <- lm(`trial 1 ebl` ~ Group + generalconfidencepre + generalconfidencepost + carotidconfidencepre + carotidconfidencepost, data=pred_logisit_data)
-ebl_t2s_pred <- lm(`trial 2 ebl` ~ Group + generalconfidencepre + generalconfidencepost + carotidconfidencepre + carotidconfidencepost, data=pred_logisit_data)
+ebl_t1s_pred <- lm(`trial 1 ebl` ~ carotidconfidencepre + carotidconfidencepost, data=pred_logisit_data)
+ebl_t2s_pred <- lm(`trial 2 ebl` ~ carotidconfidencepre + carotidconfidencepost, data=pred_logisit_data)
 
 # Train logistic regression
 ebl_results_lm_data <- data.frame(
-  coeff_names=names(coefficients(t1s_pred)),
+  coeff_names=names(coefficients(ebl_t1s_pred)),
   T1_c=coefficients(ebl_t1s_pred),
   T1_p=coef(summary(ebl_t1s_pred))[,4],
   T2_c=coefficients(ebl_t2s_pred),
@@ -112,7 +112,7 @@ ebl_results_lm_data <- data.frame(
     variable = stringr::str_extract(string=var, pattern='[cp]$')
   ) %>% reshape2::dcast(coeff_names + trial ~ variable, value.var='value') %>%
   filter(coeff_names != '(Intercept)') %>%
-  mutate(coeff_names=factor(coeff_names, levels=c('GroupTrainee', confidence_value_order)))
+  mutate(coeff_names=factor(coeff_names, levels=c(confidence_value_order)))
 
 ebl_success_conf_multi <- ggplot(ebl_results_lm_data, aes(coeff_names, abs(c), fill=trial)) +
   geom_bar(stat='identity', position=position_dodge()) + 
@@ -203,6 +203,8 @@ ggsave(dems_trial_tth_conf_multi, filename = file.path(plot_dir, 'demographics_t
 ```
 
 ```{r}
+lm(`trial 1 ebl` ~ endolast12mo, data=demographics_pred_logisit_data) %>% summary()
+
 dems_ebl_t1s_pred <- lm(`trial 1 ebl` ~ Attyears + Specialty + priorsim + priorreal + endolast12mo + cadaverlast12 + generalconfidencepre + carotidconfidencepre, data=demographics_pred_logisit_data)
 dems_ebl_t2s_pred <- lm(`trial 2 ebl` ~ Attyears + Specialty + priorsim + priorreal + endolast12mo + cadaverlast12 + generalconfidencepre + carotidconfidencepre, data=demographics_pred_logisit_data)
 

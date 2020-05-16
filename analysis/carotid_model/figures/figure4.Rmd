@@ -116,7 +116,7 @@ results_logit_data <- data.frame(
   mutate(trial=gsub('^T', 'Trial ', trial))
 ```
 
-```{r}
+```{r eval=FALSE}
 demographics_pred_logisit_data$t1_pred <- predict(dems_t1s_pred,newdata = demographics_pred_logisit_data)
 demographics_pred_logisit_data$t2_pred <- predict(dems_t2s_pred,newdata = demographics_pred_logisit_data)
 
@@ -244,6 +244,103 @@ tth_success_conf_multi <- ggplot(tth_results_lm_data, aes(coeff_names, abs(c), f
     axis.title.x = element_blank()
   )
 tth_success_conf_multi
+```
+
+```{r}
+plotting_data_ebl_conf <- pred_logisit_data %>%
+  dplyr::select(SurveyID, Group, `trial 1 ebl`, `trial 2 ebl`, carotidconfidencepre, carotidconfidencepost) %>%
+  gather(conf, conf_val, -SurveyID, -Group, -`trial 1 ebl`, -`trial 2 ebl`) %>%
+  gather(trial, ebl, -SurveyID, -Group, -conf, -conf_val) %>%
+  filter(!is.na(conf_val)) %>%
+  filter((grepl('pre', conf) & grepl('1', trial)) | (grepl('post', conf) & grepl('2', trial))) %>%
+  mutate(conf_val=factor(conf_val)) %>%
+  mutate(trial=ifelse(trial == 'trial 1 ebl', 'Trial 1', 'Trial 2'))
+
+failed_trial_1 <- pred_logisit_data %>% filter(`Trial 1 Success` == 0) %$% SurveyID
+failed_trial_2 <- pred_logisit_data %>% filter(`Trial 2 Success` == 0) %$% SurveyID
+
+plotting_data_ebl_conf <- plotting_data_ebl_conf %>%
+  mutate(failed=ifelse(
+    (SurveyID %in% failed_trial_1 & grepl('pre', conf)) | (SurveyID %in% failed_trial_2 & grepl('post', conf)), 'Fail', 'Success'))
+
+# Will make two plots so that the axis are consistent
+sample_2 <- ggplot(plotting_data_ebl_conf, aes(conf_val, ebl, color=failed)) +
+  # geom_boxplot(color='black', alpha=0.5, fill='grey', outlier.shape = NA) +
+  geom_point(position = position_jitter(width=0.2), size=2, alpha=0.5) +
+  # geom_sina() +
+  # geom_smooth(method = 'lm') +
+  stat_summary(fun.y = median, fun.ymin = median, fun.ymax = median, geom = "crossbar", width = 0.25, color='black') +
+  # stat_summary(fun.data=mean_se, geom = 'errorbar', color='black',width=0.2) +
+  facet_wrap(~trial) +
+  guides(color=guide_legend(title=NULL)) +
+  # scale_fill_jama() +
+  # scale_color_jama() +
+  # ggtitle('Multivariate prediction of TTH') +
+  guides(fill=guide_legend(title=NULL, override.aes = list(alpha=1))) +
+  xlab('Carotid Confidence') + ylab('Estimated Blood Loss (mL)') +
+  # ggtitle('Multivariate prediction of trial success') +
+  theme_bw() +
+  # facet_wrap() +
+  theme(
+    legend.position = 'top',
+    legend.justification = 'left',
+    legend.text = element_text(size=12),
+    axis.text = element_text(size=12),
+    axis.title = element_text(size=12)
+  )
+
+sample_2
+
+# ggsave(sample_2, filename = '~/Downloads/plot2.png', width = 8, height = 5)
+```
+
+```{r}
+ebl_t1s_pred <- lm(`trial 1 ebl` ~ generalconfidencepre + generalconfidencepost + carotidconfidencepre + carotidconfidencepost, data=pred_logisit_data)
+ebl_t2s_pred <- lm(`trial 2 ebl` ~ generalconfidencepre + generalconfidencepost + carotidconfidencepre + carotidconfidencepost, data=pred_logisit_data)
+
+# Train logistic regression
+ebl_results_lm_data <- data.frame(
+  coeff_names=names(coefficients(tth_t1s_pred)),
+  T1_c=coefficients(ebl_t1s_pred),
+  T1_p=coef(summary(ebl_t1s_pred))[,4],
+  T2_c=coefficients(ebl_t2s_pred),
+  T2_p=coef(summary(ebl_t2s_pred))[,4],
+  stringsAsFactors = F
+) %>%
+  gather(var, value, -coeff_names) %>%
+  mutate(
+    trial = stringr::str_extract(string=var, pattern='^T[12]'),
+    variable = stringr::str_extract(string=var, pattern='[cp]$')
+  ) %>% reshape2::dcast(coeff_names + trial ~ variable, value.var='value') %>%
+  filter(coeff_names != '(Intercept)') %>%
+  mutate(coeff_names=factor(coeff_names, levels=c(confidence_value_order))) %>%
+  mutate(trial=gsub('^T', 'Trial ', trial))
+
+ebl_success_conf_multi <- ggplot(ebl_results_lm_data, aes(coeff_names, abs(c), fill=trial)) +
+  geom_bar(stat='identity', position=position_dodge()) + 
+  geom_text(data = ebl_results_lm_data %>%
+      mutate(text=ifelse(p < 0.05, paste0('p=', round(p, 2)), 'ns'), y=max(abs(ebl_results_lm_data$c))*1.1),
+    aes(coeff_names, y, label=text, color=trial), size=12/ggplot2:::.pt, position = position_dodge(width=1), vjust=1) +
+  guides(fill=guide_legend(title=NULL), color=FALSE) +
+  scale_fill_jama() +
+  scale_color_jama() +
+  # ggtitle('Multivariate prediction of TTH') +
+  guides(fill=guide_legend(title=NULL)) +
+    xlab('Variable') + ylab('EBL Model weight') +
+  scale_x_discrete(breaks=conf_breaks_trial_sucess_conf_multi, labels=names(conf_breaks_trial_sucess_conf_multi)) +
+  scale_y_continuous(expand=c(0, 0)) +
+  # ggtitle('Multivariate prediction of trial success') +
+  theme_bw() +
+  theme(
+    legend.position = 'none',
+    # legend.justification = 'left',
+    legend.text = element_text(size=12),
+    axis.text = element_text(size=12),
+    axis.text.x = element_text(size=10),
+    axis.title = element_text(size=12),
+    axis.title.x = element_blank()
+  )
+ebl_success_conf_multi
 ```
 
 ```{r include=FALSE}

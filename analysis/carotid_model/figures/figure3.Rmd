@@ -25,6 +25,43 @@ compare_sites_data <- raw_data %>%
 ```
 
 ```{r}
+aov(`Trial 1 Success` ~ Group + endolast12mo + SiteGroup2, data = compare_sites_data) %>% summary()
+aov(`Trial 2 Success` ~ Group + endolast12mo + SiteGroup2, data = compare_sites_data) %>% summary()
+
+lm(`Trial 1 TTH` ~ Group + endolast12mo + SiteGroup2, data = compare_sites_data) %>% summary()
+lm(`trial 1 ebl` ~ Group + endolast12mo + SiteGroup2, data = compare_sites_data) %>% summary()
+lm(`Trial 2 TTH` ~ Group + endolast12mo + SiteGroup2, data = compare_sites_data) %>% summary()
+lm(`trial 2 ebl` ~ Group + endolast12mo + SiteGroup2, data = compare_sites_data) %>% summary()
+
+lm(tth_change ~ Group + SiteGroup2, data = compare_sites_data %>% mutate(tth_change=`Trial 2 TTH`-`Trial 1 TTH`)) %>% summary()
+lm(ebl_change ~ Group + SiteGroup2, data = compare_sites_data %>% mutate(ebl_change=`trial 2 ebl`-`trial 1 ebl`)) %>% summary()
+
+table(compare_sites_data$SiteGroup2)
+
+compare_sites_data %>%
+  filter(Group=='Trainee') %>%
+  dplyr::select(`Trial 1 Success`, SiteGroup2) %>%
+  mutate(`Trial 1 Success`=ifelse(`Trial 1 Success` == 1, 'S', 'F')) %>%
+  group_by(`Trial 1 Success`, SiteGroup2) %>%
+  dplyr::summarise(count=n()) %>%
+  reshape2::dcast(SiteGroup2 ~ `Trial 1 Success`, value.var='count') %>%
+  mutate(`F`=ifelse(is.na(`F`), 0, `F`)) %>%
+  column_to_rownames(var='SiteGroup2') %>%
+  chisq.test()
+
+compare_sites_data %>%
+  dplyr::select(`Trial 2 Success`, SiteGroup2) %>%
+  filter(!is.na(`Trial 2 Success`)) %>%
+  mutate(`Trial 2 Success`=ifelse(`Trial 2 Success` == 1, 'S', 'F')) %>%
+  group_by(`Trial 2 Success`, SiteGroup2) %>%
+  dplyr::summarise(count=n()) %>%
+  reshape2::dcast(SiteGroup2 ~ `Trial 2 Success`, value.var='count') %>%
+  mutate(`F`=ifelse(is.na(`F`), 0, `F`)) %>%
+  column_to_rownames(var='SiteGroup2') %>%
+  chisq.test()
+```
+
+```{r}
 trial_success_by_site <- compare_sites_data %>%
   mutate(T1S=case_when(
       `Trial 1 Success`==0 ~ 'Fail', 
@@ -96,7 +133,7 @@ success_counts_with_ps
 ```
 
 ```{r}
-trial_tth_by_site <- compare_sites_data %>%
+trial_ebl_by_site <- compare_sites_data %>%
   mutate(T1S=case_when(
       `Trial 1 Success`==0 ~ 'Fail', 
       `Trial 1 Success`==1 ~ 'Success',
@@ -106,19 +143,19 @@ trial_tth_by_site <- compare_sites_data %>%
       `Trial 2 Success`==1 ~ 'Success',
       TRUE ~ 'None')
   ) %>%
-  dplyr::select(SurveyID, Group, Source, SiteGroup2, `Trial 1 TTH`, `Trial 2 TTH`) %>%
-  filter(!is.na( `Trial 2 TTH`)) %>%
+  dplyr::select(SurveyID, Group, Source, SiteGroup2, `trial 1 ebl`, `trial 2 ebl`) %>%
+  filter(!is.na(`trial 2 ebl`)) %>%
   gather(trial, value, -SurveyID, -Group, -Source, -SiteGroup2)
 
-tth_by_site_final <- ggplot(trial_tth_by_site, aes(SiteGroup2, value, color=trial)) +
+ebl_by_site_final <- ggplot(trial_ebl_by_site, aes(SiteGroup2, value, color=trial)) +
   geom_boxplot(outlier.shape=NA) +
-  geom_point(position = position_jitterdodge(jitter.width = 0.3), alpha=0.75) +
+  geom_point(position = position_jitterdodge(jitter.width = 0.2), alpha=0.75) +
   guides(color=guide_legend(title=NULL, override.aes = list(label=''))) +
-  stat_compare_means(aes(group = trial), label = "p.signif", paired = T, label.y = 300*1.1) +
+  stat_compare_means(aes(group = trial), label = "p.signif", paired = T, label.y = max(trial_ebl_by_site$value)*1.1) +
   scale_color_jama() +
-  ylab('Time to Hemostasis (sec)') +
+  ylab('Estimated Blood Loss (mL)') +
   xlab('Site') +
-  scale_y_continuous(limits=c(min(trial_tth_by_site$value)*0.95, max(trial_tth_by_site$value*1.15))) +
+  scale_y_continuous(limits=c(min(trial_ebl_by_site$value)*0.95, max(trial_ebl_by_site$value*1.15))) +
   theme_bw() +
   theme(
     legend.position = 'top',
@@ -128,12 +165,48 @@ tth_by_site_final <- ggplot(trial_tth_by_site, aes(SiteGroup2, value, color=tria
     axis.title = element_text(size = 12)
   )
 
-tth_by_site_final
+ebl_by_site_final
+```
+
+```{r}
+improvement_trial_ebl_by_site <- compare_sites_data %>%
+  mutate(T1S=case_when(
+      `Trial 1 Success`==0 ~ 'Fail', 
+      `Trial 1 Success`==1 ~ 'Success',
+      TRUE ~ 'None'),
+    T2S=case_when(
+      `Trial 2 Success`==0 ~ 'Fail', 
+      `Trial 2 Success`==1 ~ 'Success',
+      TRUE ~ 'None')
+  ) %>%
+  dplyr::select(SurveyID, Group, Source, SiteGroup2, `trial 1 ebl`, `trial 2 ebl`) %>%
+  filter(!is.na(`trial 2 ebl`)) %>%
+  mutate(value=`trial 2 ebl` - `trial 1 ebl`)
+
+improvement_ebl_by_site_final <- ggplot(trial_ebl_by_site, aes(SiteGroup2, value)) +
+  geom_boxplot(outlier.shape=NA) +
+  # geom_point(position = position_jitterdodge(jitter.width = 0.2), alpha=0.75) +
+  # guides(color=guide_legend(title=NULL, override.aes = list(label=''))) +
+  # stat_compare_means(aes(group = trial), label = "p.signif", paired = T, label.y = max(trial_ebl_by_site$value)*1.1) +
+  scale_color_jama() +
+  ylab('Chance in estimated Blood Loss (mL)') +
+  xlab('Site') +
+  scale_y_continuous(limits=c(min(trial_ebl_by_site$value)*0.95, max(trial_ebl_by_site$value*1.15))) +
+  theme_bw() +
+  theme(
+    legend.position = 'top',
+    legend.justification = 'left',
+    legend.text = element_text(size=12),
+    axis.text = element_text(size=12),
+    axis.title = element_text(size = 12)
+  )
+
+improvement_ebl_by_site_final
 ```
 
 ```{r}
 fig3_r1 <- ggpubr::ggarrange(
-  success_counts_with_ps, tth_by_site_final,
+  success_counts_with_ps, ebl_by_site_final,
   labels = c('a', 'b'), ncol = 2
 )
 ```

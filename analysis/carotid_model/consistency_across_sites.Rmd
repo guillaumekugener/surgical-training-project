@@ -70,7 +70,38 @@ confidence_across_sites <- ggplot(conf_tile_plot, aes(SiteGroup2, count/total, f
   scale_fill_gradient2(low='blue', high='red', mid='white', midpoint=3) +
   facet_wrap(~conf_var, ncol=2)
 
+
+
 ggsave(confidence_across_sites, filename = file.path(plot_dir, 'confidence_across_sites.png'), width=8, height=5)
+```
+
+```{r}
+axis_names_clean <- c(
+  'generalconfidencepre'='General\nconfidence pre',
+  'generalconfidencepost'='General\nconfidence post',
+  'carotidconfidencepre'='Carotid\nconfidence pre',
+  'carotidconfidencepost'='Carotid\nconfidence post'
+)
+
+group_conf_tile_plot <- confidence_values %>%
+  filter(!is.na(conf_val)) %>%
+  group_by(Group, conf_var, conf_val) %>% 
+  dplyr::summarise(count=n()) %>%
+  mutate(count=ifelse(is.na(count), 0, count)) %>%
+  group_by(Group, conf_var) %>%
+  mutate(total=sum(count)) %>%
+  mutate(conf_clean=axis_names_clean[conf_var])
+
+group_confidence_across_sites <- ggplot(group_conf_tile_plot, aes(conf_var, count/total, fill=conf_val)) +
+  geom_bar(stat='identity') +
+  scale_fill_gradient2(low='blue', high='red', mid='white', midpoint=3) +
+  facet_wrap(~Group, ncol=2) +
+  theme(axis.text.x = element_text(angle = 90, hjust=1, vjust=0.5))
+
+
+
+ggsave(group_confidence_across_sites, filename = file.path(plot_dir, 'group_confidence_across_sites.png'), width=8, height=5)
+
 ```
 
 ```{r}
