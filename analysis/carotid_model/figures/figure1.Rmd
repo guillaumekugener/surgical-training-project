@@ -31,7 +31,7 @@ ordered_survey_id <- change_in_scores %>%
   SurveyID
 
 change_in_scores %<>% mutate(SurveyID = factor(SurveyID, levels=ordered_survey_id))
-change_in_scores %<>% mutate(MI=ifelse(SurveyID %in% most_improved_data$SurveyID, 'Training Rescue', NA))
+# change_in_scores %<>% mutate(MI=ifelse(SurveyID %in% most_improved_data$SurveyID, 'Training Rescue', NA))
 ```
 
 ```{r}
@@ -56,10 +56,12 @@ t2_densdf <- data.frame(expand.grid(TTH=t2_dens_values$x , ebl=t2_dens_values$y)
 
 scale_max_to_use <- max(t1_densdf$z, t2_densdf$z)
 
+plot_margin = 0.35
+
 # TTH vs. EBL density heatmap
 tth_ebl_heatmap_t1 <- ggplot(scatter_ebl_tth %>% filter(trial == 1), aes(TTH, ebl)) +
   stat_density_2d(aes(fill = ..density..), geom = "raster", contour = FALSE) +
-  scale_fill_distiller(palette= "Spectral", direction=-1) +
+  scale_fill_distiller(palette= "Spectral", direction=-1, breaks=c(0, 8.2e-06), labels=c('Low', 'High'), limits=c(0, 8.2e-06)) +
   # guides(fill=guide_legend()) +
   scale_x_continuous(expand = c(0, 0), limits=c(0, max(scatter_ebl_tth$TTH))) +
   scale_y_continuous(expand = c(0, 0), limits=c(0, max(scatter_ebl_tth$ebl))) +
@@ -70,15 +72,16 @@ tth_ebl_heatmap_t1 <- ggplot(scatter_ebl_tth %>% filter(trial == 1), aes(TTH, eb
     # axis.title = element_text(size = 12),
     axis.text = element_text(size=12),
     axis.title = element_blank(),
-    legend.position = 'none',
-    strip.text = element_text(size=12)
+    # legend.position = 'none',
+    strip.text = element_text(size=12),
+    plot.margin=unit(c(plot_margin, plot_margin, plot_margin, plot_margin),"cm")
   )
 
 # TTH vs. EBL density heatmap
 tth_ebl_heatmap_t2 <- ggplot(scatter_ebl_tth %>% filter(trial == 2), aes(TTH, ebl)) +
   stat_density_2d(aes(fill = ..density..), geom = "raster", contour = FALSE) +
   scale_fill_distiller(palette= "Spectral", direction=-1) +
-  scale_x_continuous(expand = c(0, 0), limits=c(0, max(scatter_ebl_tth$TTH))) +
+  scale_x_continuous(expand = c(0, 0), limits=c(0, max(scatter_ebl_tth$TTH)+30)) +
   scale_y_continuous(expand = c(0, 0), limits=c(0, max(scatter_ebl_tth$ebl))) +
   xlab('Time to Hemostatis (sec)') + ylab('Estimated Blood Loss (mL)') +
   ggtitle('Trial 2 EBL vs. TTH density') +
@@ -88,7 +91,8 @@ tth_ebl_heatmap_t2 <- ggplot(scatter_ebl_tth %>% filter(trial == 2), aes(TTH, eb
     axis.text = element_text(size=12),
     axis.title = element_blank(),
     legend.position = 'none',
-    strip.text = element_text(size=12)
+    strip.text = element_text(size=12),
+    plot.margin=unit(c(plot_margin, plot_margin, plot_margin, plot_margin),"cm")
   )
 ```
 
@@ -103,200 +107,173 @@ ggsave(figure_1_density, filename = file.path(plot_dir, 'figure_1_density.png'),
 ```
 
 ```{r}
-density_plot_row <- ggpubr::ggarrange(
-  tth_ebl_heatmap_t1, tth_ebl_heatmap_t2, 
-  ncol = 2, legend = 'right', common.legend = TRUE,
-  labels = c('a', 'b')
-)
-density_plot_row
-```
-
-```{r}
-# Success rate general
-preprocess_for_success_rate <- raw_data %>% 
-  dplyr::select(SurveyID, Group, `Trial 1` = `Trial 1 Success`, `Trial 2`=`Trial 2 Success`) %>%
-  gather(trial, s, -SurveyID, -Group) %>%
-  filter(!is.na(s))
-
-success_rate_overall <- preprocess_for_success_rate %>%
-  group_by(trial) %>%
-  dplyr::summarise( 
-    rate=length(which(s==1))/n()
-  )
-
-# Contigency table creation
-fisher_success_overall <- preprocess_for_success_rate %>%
-  group_by(trial, s) %>%
-  dplyr::summarise(count=n()) %>%
-  mutate(v=ifelse(s==0, 'fail', 'success')) %>%
-  dcast(trial ~ v, value.var='count') %>%
-  column_to_rownames('trial') %>%
-  fisher.test()
-
-success_overall_p_text <- ifelse(fisher_success_overall$p.value < 0.001, 'p < 0.001', ifelse(fisher_success_overall$p.value < 0.05, paste0('p = ', round(fisher_success_overall$p.value, 2)), ''))
-```
-
-```{r}
-overall_success_rate <- ggplot(success_rate_overall, aes(trial, rate*100, fill=trial)) +
-  geom_bar(stat = 'identity', color='black') +
-  annotate('text', x = 2, y = 1.05 * 100, label=success_overall_p_text, size=12/ggplot2:::.pt) +
-  scale_fill_jama() +
-  # facet_wrap(~Group) +
-  xlab('Trial Number') +
-  ylab('Trial success rate (%)') +
-  scale_y_continuous(limits = c(0, 100 * 1.1), expand = c(0,0)) +
-  theme_bw() +
-  theme(
-    text = element_text(size = 12),
-    axis.text = element_text(size=12),
-    # axis.title = element_text(size=12),
-    axis.title.x = element_blank(),
-    panel.grid.major.x = element_blank(),
-    legend.position = 'none',
-    strip.text = element_text(size = 12)
-  )
-```
-
-```{r include=FALSE}
 tth_columns <- raw_data %>% colnames() %>% .[grep('TTH', .)] %>% setdiff(., c('Trial 1 TTH_1', 'Trial 2 TTH_1'))
-tth_data <- raw_data %>%
-  dplyr::select(SurveyID, Group, tth_columns) %>%
-  gather(var, value, -SurveyID, -Group) %>%
+ebl_columns <- raw_data %>% colnames() %>% .[grep('ebl', .)]
+
+most_improved_data <- raw_data %>%
+  dplyr::select(SurveyID, Group, tth_columns, `Trial 1 Success`, `Trial 2 Success`) %>%
+  gather(var, value, -SurveyID, -Group, -`Trial 1 Success`, -`Trial 2 Success`) %>%
   mutate(trial = gsub(' TTH', '', var)) %>%
-  mutate(trial=factor(trial, c('Trial 1', 'Trial 2', 'Trial 3')))
-
-# To look for those that have complete data
-counts_by_individual <- tth_data %>%
-  group_by(SurveyID) %>%
-  dplyr::summarise(count=length(which(!is.na(value)))) %>%
-  arrange(-count)
-```
-
-```{r}
-tth_overall_plot <- ggplot(tth_bar_plot_data, aes(trial, m, fill=trial)) +
-  geom_bar(stat='identity', color='black', alpha = 1) +
-  geom_errorbar(aes(ymin=m-s, ymax=m+s), width=0.2) +
-  annotate(x = 2, y = 300*1.05, geom = 'text', label = 'p < 0.001', size = 12/ggplot2::.pt) +
-  # geom_point(position = position_jitter(width = 0.25)) +
-  scale_fill_jama() +
-  # facet_wrap(~Group) +
-  xlab('Trial Number') +
-  ylab('Time to Hemostasis') +
-  scale_y_continuous(expand = c(0,0), limits = c(0, 300*1.1)) +
-  theme_bw() +
-  theme(
-    text = element_text(size = 12),
-    axis.text = element_text(size=12),
-    # axis.title = element_text(size=12),
-    axis.title.x = element_blank(),
-    panel.grid.major.x = element_blank(),
-    legend.position = 'none',
-    strip.text = element_text(size = 12)
+  mutate(trial=factor(trial, c('Trial 1', 'Trial 2', 'Trial 3'))) %>%
+  filter(`Trial 1 Success` == 0, `Trial 2 Success` == 1) %>%
+  dplyr::rename(tth=value) %>%
+  left_join(., 
+    raw_data %>%
+      dplyr::select(SurveyID, Group, `Trial 1 Success`, `Trial 2 Success`, ebl_columns) %>%
+      magrittr::set_colnames(gsub('  ', ' ', colnames(.))) %>%
+      gather(var, value, -SurveyID, -Group, -`Trial 1 Success`, -`Trial 2 Success`) %>%
+      mutate(trial = gsub(' ebl', '', var)) %>%
+      mutate(trial=factor(gsub('^t', 'T', trial), c('Trial 1', 'Trial 2', 'Trial 3'))) %>%
+      filter(`Trial 1 Success` == 0, `Trial 2 Success` == 1) %>%
+      dplyr::select(SurveyID, trial, ebl=value),
+    by = c('SurveyID', 'trial')
   )
 ```
 
 ```{r}
-fig1_table <- preprocess_for_success_rate %>%
-  reshape2::dcast(SurveyID + Group ~ trial, value.var='s') %>%
-  mutate(G=paste0(`Trial 1` ,`Trial 2`)) %>%
-  group_by(G) %>%
-  dplyr::summarise(count=n()) %>%
-  filter(G %in% c('00', '01', '10', '11')) %>%
-  mutate(
-    `Trial 1`=ifelse(grepl('^0', G), 'T1 Fail', 'T1 Success'),
-    `Trial 2`=ifelse(grepl('0$', G), 'T2 Fail', 'T2 Success')
-  ) %>%
-  reshape2::dcast(`Trial 1` ~ `Trial 2`, value.var='count') %>%
-  column_to_rownames(var='Trial 1')
+change_in_scores <- raw_data %>% 
+  dplyr::select(SurveyID, Group, `Trial 1 TTH`, `Trial 2 TTH`, `trial 1 ebl`, `trial 2 ebl`) %>%
+  gather(var, value, -SurveyID, -Group) %>%
+  mutate(variable = gsub('.* ', '', var)) %>%
+  mutate(trial = stringr::str_extract(string=var, pattern='[0-9]+')) %>%
+  reshape2::dcast(SurveyID + Group + trial ~ variable, value.var='value') %>% 
+  setDT() %>% 
+  dcast(SurveyID + Group ~ trial, value.var=c('ebl', 'TTH')) %>%
+  mutate(change_in_tth=TTH_1 - TTH_2, change_in_ebl = ebl_1 - ebl_2)
 
-fig1_table_placeholder <- grid.table(fig1_table)
+ordered_survey_id <- change_in_scores %>%
+  arrange(change_in_tth) %$%
+  SurveyID
+
+change_in_scores %<>% mutate(SurveyID = factor(SurveyID, levels=ordered_survey_id))
+change_in_scores %<>% mutate(Group2=ifelse(SurveyID %in% most_improved_data$SurveyID, 'Training rescue', 'Other'))
 ```
 
 ```{r}
-second_row <- ggpubr::ggarrange(
-  overall_success_rate, tth_overall_plot, tableGrob((fig1_table)),
-  ncol = 3, labels = c('c', 'd', 'e')
-)
+quartile_cutoff <- change_in_scores %$% quantile(change_in_tth, na.rm=T, c(0.75))
+change_in_scores %<>% mutate(Group3=ifelse(change_in_tth >= quartile_cutoff, 'MIQ', 'Other'))
 ```
 
 ```{r}
-change_in_scores %>% dim()
-change_in_scores %>% filter(change_in_ebl > 0) %>% dim()
-```
-
-```{r}
-# Maybe highlight (with grey in the background) for the ones that improved (right lower quadrant, highlight in red for example)
-tth_change_overall <- ggplot(change_in_scores, aes(SurveyID, change_in_tth)) +
-  geom_segment(aes(x = SurveyID, xend=SurveyID, y = 0, yend = change_in_tth), color='grey', alpha=0.75) +
-  geom_point(color='black') +
-  # guides(color=guide_legend(title = NA, title.position = 'bottom')) +
-  # scale_color_manual(values=pal_jama("default")(1), na.value=pal_jama("default")(7)[2], breaks=c('Training Rescue')) +
-  xlab('Individual ranked by improvement based on TTH change') +
-  ylab('TTH seconds saved (Trial 1 vs. Trial 2)') +
-  scale_x_discrete(expand=c(0.01, 0.01)) +
+jama_colors <- pal_jama("default")(7)
+trial_1_rank_order <- change_in_scores %>% arrange(TTH_1, -change_in_tth) %$% SurveyID
+absolute_change_in_tth <- ggplot(change_in_scores %>% mutate(SurveyID=factor(SurveyID, levels=trial_1_rank_order)), aes(color=Group2)) +
+  geom_segment(aes(x = SurveyID, xend=SurveyID, y = TTH_1, yend = TTH_2)) +
+  geom_point(aes(x=SurveyID, y= TTH_1), color = jama_colors[1], alpha=0.75) +
+  geom_point(aes(x=SurveyID, y= TTH_2), color=jama_colors[2], alpha=0.75) +
+  guides(color=guide_legend(title=NULL)) +
+  # scale_linetype_manual(values = c('Training rescue'=1), na.value = 2) +
+  scale_color_manual(values=c('Training rescue'='black', 'MIQ'='black', 'Other'='grey'), breaks=c('Training rescue', 'Other'),na.value='grey') +
+  xlab('Individual ranked by improvement in TTH') +
+  ylab('Time to Hemostasis (sec)') +
   theme_bw() +
   theme(
-    legend.position = c(0.01,0.99),
-    legend.justification = c(0,1),
-    legend.background = element_rect(fill='transparent'),
+    legend.position = 'top',
+    legend.justification = 'left',
     legend.text = element_text(size=12),
-    legend.title = element_blank(),
     axis.text.x = element_blank(),
     axis.ticks.x = element_blank(),
-    # axis.title.x = element_blank(),
+    axis.text.y = element_text(size=12),
+    axis.title = element_text(size=12),
     panel.grid.major.x = element_blank(),
     panel.grid.minor.x = element_blank()
   )
+
+absolute_change_in_tth
+```
+
+
+```{r}
+quartile_cutoff <- change_in_scores %$% quantile(change_in_tth, na.rm=T, c(0.75))
+data_top_quartile <- change_in_scores %>% 
+  filter(change_in_tth >= quartile_cutoff)
+
+attending_stats_years_in_training_quantile <- raw_data %>%
+  filter(SurveyID %in% data_top_quartile$SurveyID, Group == 'Attending') %>%
+  dplyr::select(Attyears)
+
+top_quartile_mean_values <- data_top_quartile %>%
+  summarise_if(is.numeric, median) %>%
+  mutate(tth_improvement=(1-TTH_2/TTH_1)*100, ebl_improvement=(1-ebl_2/ebl_1)*100)
+
+tth_top_quartile_stats <- data_top_quartile %$%
+  t.test(TTH_1, TTH_2, paired = TRUE)
+
+ebl_top_quartile_stats <- data_top_quartile %$%
+  t.test(ebl_1, ebl_2, paired = TRUE)
+
+quartile_success_rates <- preprocess_for_success_rate %>%
+  filter(SurveyID %in% data_top_quartile$SurveyID) %>%
+  group_by(trial) %>%
+  dplyr::summarise(
+    perc_success=sum(s)/n()*100
+  )
+
+quartile_success_stat_prep <- preprocess_for_success_rate %>%
+  filter(SurveyID %in% data_top_quartile$SurveyID) %>%
+  group_by(trial, s) %>%
+  dplyr::summarise(count=n()) %>%
+  dcast(s ~ trial, value.var='count')
+
+quartile_success_stat_prep[is.na(quartile_success_stat_prep)] <- 0
+quartile_success_stat <- fisher.test(quartile_success_stat_prep[,c('Trial 1', 'Trial 2')])
 ```
 
 ```{r}
-ebl_TTH_correlation <- scatter_ebl_tth %>%
-  filter(!is.na(TTH), !is.na(ebl)) %$%
-  cor.test(TTH, ebl)
+quartiles_all_miq <- change_in_scores %$% quantile(change_in_ebl, na.rm=T, c(0.25, 0.5, 0.75, 1.00))
 
-scatter_plot_attempt <- ggplot(scatter_ebl_tth %>% mutate(trial=paste0('Trial ', trial)), aes(TTH, ebl, color=trial)) +
-  geom_point(size=2, alpha=0.5) +
-  scale_color_jama() +
+change_in_scores %<>%
+  mutate(quart=case_when(
+    change_in_ebl <= quartiles_all_miq[1] ~ 'Q4\nLeast\nImproved',
+    change_in_ebl <= quartiles_all_miq[2] ~ 'Q3',
+    change_in_ebl <= quartiles_all_miq[3] ~ 'Q2',
+    change_in_ebl <= quartiles_all_miq[4] ~ 'Q1\nMost\nImproved',
+    TRUE ~ 'None'
+  ))
+
+quartiles_plotting <- change_in_scores %>%
+  dplyr::select(SurveyID, Group, quart, ebl_1, ebl_2, change_in_ebl) %>%
+  gather(var, val, -SurveyID, -Group, -quart, -change_in_ebl) %>%
+  mutate(var=gsub('TTH_', 'Trial', var)) %>%
+  mutate(var=gsub('ebl_', 'Trial ', var))
+
+miq_box_plot <- ggplot(quartiles_plotting %>% filter(quart != 'None'), aes(quart, val, color=var)) +
+  # geom_boxplot(alpha=0.5, outlier.shape = NA) +
   guides(color=guide_legend(title=NULL)) +
-  geom_smooth(method = 'lm', color='black', linetype=2) +
-  annotate('text', x = max(scatter_ebl_tth$TTH, na.rm = T), y = min(scatter_ebl_tth$ebl, na.rm = T), label=paste0('R: ', round(ebl_TTH_correlation$estimate, 2)), size = 12/ggplot2:::.pt, hjust=1, vjust=0) +
-  xlab('Time to Hemostasis (sec)') + ylab('Estimated Blood Loss (mL)') +
-  # scale_x_log10() +
-  # scale_y_log10() +
-  # facet_wrap(~Group) +
+  scale_color_jama() +
+  scale_fill_jama() +
+  geom_point(position = position_jitterdodge(dodge.width = 0.75, jitter.width = 0.2), size=2, alpha=0.75) +
+  # stat_summary(position = position_dodge(width = 0.75), aes(group=var), fun.y = median, fun.ymin = median, fun.ymax = median, geom = "crossbar", width = 0.25, color='black') +
+  xlab('Improvement Quartile') + ylab('Estimated Blood Loss (mL)') +
   theme_bw() +
   theme(
-    legend.position = c(0,0.99),
-    legend.justification = c(0,1),
-    legend.text = element_text(size=12),
-    legend.title = element_text(size=12),
-    legend.background = element_rect(fill='transparent'),
-    legend.key=element_rect(fill='transparent'),
+    legend.position = 'top',
+    legend.justification = 'left',
     axis.text = element_text(size=12),
+    legend.text = element_text(size=12),
     axis.title = element_text(size=12)
   )
+
+miq_box_plot
 ```
 
 ```{r}
-third_row <- ggpubr::ggarrange(
-  tth_change_overall, scatter_plot_attempt,
-  ncol = 2, widths = c(1,1), labels = c('f', 'g')
+figure1_miq_performance <- ggpubr::ggarrange(
+  absolute_change_in_tth, miq_box_plot, labels = c('b', 'c'), nrow = 1
 )
+
+ggsave(figure1_miq_performance, filename = file.path(plot_dir, 'figure1_miq_performance.png'), width = 8, height = 4, units = 'in')
 ```
 
 ```{r}
-# Final figure
-figure1_clean <- ggpubr::ggarrange(
-  density_plot_row, 
-  second_row, 
-  third_row, nrow = 3
-)
+# Final figure 1
+final_figure1 <- ggpubr::ggarrange(
+  figure_1_density, 
+  figure1_miq_performance, labels = c('a', ''),
+  nrow = 2, ncol = 1, heights = c(1.5, 1))
 
-ggsave(figure1_clean, filename = file.path(source_dir, 'figures', 'figure1.png'), width = 8, height = 10, units = 'in')
+ggsave(final_figure1, filename = file.path(final_figure_dir, 'figure1.png'), width = 8, height = 10, units='in')
 ```
-
-
-
 
 
 
