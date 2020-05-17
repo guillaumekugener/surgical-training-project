@@ -1,0 +1,72 @@
+---
+title: "Table 3"
+author: "Guillaume Kugener"
+date: "5/16/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+source('~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/carotid_model/preprocess_data.R')
+library(xtable)
+```
+
+```{r}
+colnames(raw_data)
+simulation_experience <- raw_data %>%
+  dplyr::select(`Anatomy is realistic`, 
+    `Tissue feel is realistic`, 
+    `Depth perception is realistic`, 
+    `Instrument application is realistic`, 
+    `Image projection and graphics are realistic`) %>%
+  dplyr::summarise_if(is.numeric, list(~round(mean(., na.rm=T), 1), ~length(.[!is.na(.)]))) %>%
+  gather(var, value) %>%
+  mutate(var_true=gsub('.*_', '', var)) %>%
+  mutate(var=gsub('_.*', '', var)) %>%
+  spread(var_true, value) %>%
+  mutate(Group='Simulation Experience')
+
+simulation_utility <- raw_data %>%
+  dplyr::select("This model is useful for teaching anatomy",
+    "This model is useful for teaching surgical planning",
+    "This model is useful for teaching operative technique",
+    "This model is useful for improving hand-eye coordination",
+    "This model is useful as an overall training tool",
+    "This model is useful for teaching carotid artery injury repair",
+    "Skills learned are transferrable to the operating room",
+    "This model should be incorporated into a training curriculum",
+    "I would recommend this model to trainees") %>%
+  dplyr::summarise_if(is.numeric, list(~round(mean(., na.rm=T), 1), ~length(.[!is.na(.)]))) %>%
+  gather(var, value) %>%
+  mutate(var_true=gsub('.*_', '', var)) %>%
+  mutate(var=gsub('_.*', '', var)) %>%
+  spread(var_true, value) %>%
+  mutate(Group='Simulation Utility')
+
+sim_exp_clean_names <- c(
+  "This model is useful for teaching anatomy"="To teach anatomy",
+  "This model is useful for teaching surgical planning"="To teach surgical planning",
+  "This model is useful for teaching operative technique"="To teach operative technique",
+  "This model is useful for improving hand-eye coordination"="Improving hand-eye coordination",
+  "This model is useful as an overall training tool"="To teach carotid artery injury repair",
+  "This model is useful for teaching carotid artery injury repair"="As overall training tool",
+  "Skills learned are transferrable to the operating room"="Skills learned are transferrable to the operating room",
+  "This model should be incorporated into a training curriculum"="This model should be incorporated into a training curriculum",
+  "I would recommend this model to trainees"="I would recommend this model to trainees"
+)
+
+simulation_utility %<>% mutate(var=sim_exp_clean_names[var])
+```
+
+```{r}
+library(gt)
+library(glue)
+```
+
+```{r}
+tab3_data_all <- rbind(simulation_experience, simulation_utility) %>%
+  # dplyr::select(-Group) %>%
+  dplyr::select(SurveyQ=var, Mean=round, Respondents=length)
+
+tab3_data_all %>% write.table(., file = file.path(source_dir, 'figures', 'table3.tsv'), sep = '\t', row.names=F, quote = F)  
+```

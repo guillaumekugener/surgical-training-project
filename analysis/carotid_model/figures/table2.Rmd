@@ -1,0 +1,86 @@
+---
+title: "Table 2"
+author: "Guillaume Kugener"
+date: "5/16/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+source('~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/carotid_model/preprocess_data.R')
+```
+
+```{r}
+t1_confidence_data <- raw_data %>%
+  filter(!is.na(carotidconfidencepre)) %>%
+  group_by(carotidconfidencepre) %>%
+  dplyr::summarise(
+    count=n(),
+    ebl=mean(`trial 1 ebl`, na.rm=T),
+    tth=mean(`Trial 1 TTH`, na.rm=T),
+    success=100*sum(`Trial 1 Success`, na.rm=T)/length(which(!is.na(`Trial 1 Success`)))
+  ) %>% mutate_if(is.numeric, funs(round(.)))
+
+t2_confidence_data <- raw_data %>%
+  filter(!is.na(carotidconfidencepost)) %>%
+  group_by(carotidconfidencepost) %>%
+  dplyr::summarise(
+    count=n(),
+    ebl=mean(`trial 2 ebl`, na.rm=T),
+    tth=mean(`Trial 2 TTH`, na.rm=T),
+    success=100*sum(`Trial 2 Success`, na.rm=T)/length(which(!is.na(`Trial 2 Success`)))
+  ) %>% mutate_if(is.numeric, funs(round(.)))
+```
+
+```{r}
+extract_aov_p_value <- function(d, pred, var) {
+  aov_res <- aov(as.formula(paste0(pred, '~', var)), data=raw_data) %>% summary()
+  pval_out <- aov_res[[1]][['Pr(>F)']][[1]]
+  return(ifelse(pval_out < 0.05, ifelse(pval_out < 0.0001, 'p < 0.0001', paste0('p = ', round(pval_out, 4))), 'ns'))
+}
+
+fishers_success_carotid_conf <- function(d, conf, succ) {
+  fishers_out <- raw_data %>%
+    dplyr::select(!!as.name(conf), !!as.name(succ)) %>%
+    filter(!is.na(!!as.name(conf)), !is.na(!!as.name(succ))) %>%
+    group_by(!!as.name(conf), !!as.name(succ)) %>%
+    dplyr::summarise(count=n()) %>%
+    spread(!!as.name(succ), count) %>%
+    ungroup() %>%
+    dplyr::select(-!!as.name(conf)) %>%
+    fisher.test()
+  
+  pval_out <- fishers_out$p.value
+  return(ifelse(pval_out < 0.05, ifelse(pval_out < 0.0001, 'p < 0.0001', paste0('p = ', round(pval_out, 4))), 'ns'))
+}
+```
+
+```{r}
+t2r1 <- c('Pre-Trial', paste0(t1_confidence_data$carotidconfidencepre, ' (n=', t1_confidence_data$count, ')'), '')
+t2r2 <- c('Trial EBL', paste0(t1_confidence_data$ebl), extract_aov_p_value(raw_data, 'carotidconfidencepre', '`trial 1 ebl`'))
+t2r3 <- c('Trial 2 TTH', paste0(t1_confidence_data$tth), extract_aov_p_value(raw_data, 'carotidconfidencepre', '`Trial 1 TTH`'))
+t2r4 <- c('Trial 2 Success', paste0(t1_confidence_data$success, '%'), fishers_success_carotid_conf(raw_data, 'carotidconfidencepre', 'Trial 1 Success'))
+
+t2r5 <- c('Post-Trial', paste0(t2_confidence_data$carotidconfidencepost, ' (n=', t2_confidence_data$count, ')'), '')
+t2r6 <- c('Trial 2 EBL', paste0(t2_confidence_data$ebl), extract_aov_p_value(raw_data, 'carotidconfidencepost', '`trial 2 ebl`'))
+t2r7 <- c('Trial 2 TTH', paste0(t2_confidence_data$tth), extract_aov_p_value(raw_data, 'carotidconfidencepost', '`Trial 2 TTH`'))
+t2r8 <- c('Trial 2 Success', paste0(t2_confidence_data$success, '%'), fishers_success_carotid_conf(raw_data, 'carotidconfidencepost', 'Trial 2 Success'))
+```
+
+```{r}
+rbind(
+  t2r1,
+  t2r2,
+  t2r3,
+  t2r4,
+  t2r5,
+  t2r6,
+  t2r7,
+  t2r8
+) %>% write.table(.,file = file.path(source_dir, 'figures', 'table2.tsv'), sep='\t', quote=F, row.names=F)
+```
+
+
+
+
+

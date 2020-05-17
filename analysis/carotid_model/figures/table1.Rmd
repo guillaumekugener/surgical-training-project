@@ -1,0 +1,254 @@
+---
+title: 'Table 1: Surgeon Performance in Managing Simulated ICAI'
+author: "Guillaume Kugener"
+date: "5/16/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+source('~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/carotid_model/preprocess_data.R')
+```
+
+```{r}
+# Build a table from the raw data
+
+t1_columns <- c('', 'Overall', 'Attendings', 'Trainees', 'Training Targets')
+t1r1 <- c(
+  '',
+  nrow(raw_data), 
+  nrow(raw_data %>% filter(Group == 'Attending')), 
+  nrow(raw_data %>% filter(Group=='Trainee')),
+  nrow(raw_data %>% filter(`Trial 1 Success` == 0, `Trial 2 Success` == 1))  
+)
+t1r2 <- c(
+  'Neurosurgery',
+  nrow(raw_data %>% filter(Specialty=='Neurosurgery')),
+  nrow(raw_data %>% filter(Specialty=='Neurosurgery', Group == 'Attending')), 
+  nrow(raw_data %>% filter(Specialty=='Neurosurgery', Group=='Trainee')),
+  nrow(raw_data %>% filter(Specialty=='Neurosurgery', `Trial 1 Success` == 0, `Trial 2 Success` == 1))  
+)
+raw_data %>% distinct(Specialty)
+
+t1r3 <- c(
+  'ENT',
+  paste0(nrow(raw_data %>% filter(Specialty=='Otolaryngology')), ' (2 Other)'),
+  paste0(nrow(raw_data %>% filter(Specialty=='Otolaryngology', Group == 'Attending')), ' (1 GS)'), 
+  paste0(nrow(raw_data %>% filter(Specialty=='Otolaryngology', Group == 'Trainee')), ' (1 UNK)'),
+  paste0(nrow(raw_data %>% filter(Specialty=='Otolaryngology', `Trial 1 Success` == 0, `Trial 2 Success` == 1)), ' (1 UNK)')  
+)
+
+t1r4 <- c(
+  'Years',
+  '-', 
+  round(mean(raw_data %>% filter(Group == 'Attending') %$% Totyears, na.rm = T), 1), 
+  round(mean(raw_data %>% filter(Group=='Trainee') %$% Totyears, na.rm = T), 1),
+  raw_data %>% 
+    filter(`Trial 1 Success` == 0, `Trial 2 Success` == 1) %>% 
+    group_by(Group) %>% 
+    dplyr::summarise(m=mean(Totyears, na.rm=T), count=n()) %>%
+    mutate(text=paste0(str_extract(pattern='^[AT]', string=Group), ': ', round(m, 1), ' (n=', count, ')')) %$%
+    paste0(text, collapse= ', ')
+)
+```
+
+```{r}
+t1r5 <- c(
+  'No. Endoscopic Cases',
+  round(mean(raw_data$endolast12mo, na.rm=T)), 
+  round(mean(raw_data %>% filter(Group == 'Attending') %$% endolast12mo, na.rm=T)), 
+  round(mean(raw_data %>% filter(Group=='Trainee') %$% endolast12mo, na.rm=T)),
+  round(mean(raw_data %>% filter(`Trial 1 Success` == 0, `Trial 2 Success` == 1) %$% endolast12mo, na.rm=T))  
+)
+
+t1r6 <- c(
+  'No. Cadaveric Cases',
+  round(mean(raw_data$cadaverlast12, na.rm=T)), 
+  round(mean(raw_data %>% filter(Group == 'Attending') %$% cadaverlast12, na.rm=T)), 
+  round(mean(raw_data %>% filter(Group=='Trainee') %$% cadaverlast12, na.rm=T)),
+  round(mean(raw_data %>% filter(`Trial 1 Success` == 0, `Trial 2 Success` == 1) %$% cadaverlast12, na.rm=T))  
+)
+```
+
+```{r}
+t1r7 <- c(
+  'Carotid Confidence Pre',
+  round(mean(raw_data$carotidconfidencepre, na.rm=T), 1), 
+  round(mean(raw_data %>% filter(Group == 'Attending') %$% carotidconfidencepre, na.rm=T), 1), 
+  round(mean(raw_data %>% filter(Group=='Trainee') %$% carotidconfidencepre, na.rm=T), 1),
+  round(mean(raw_data %>% filter(`Trial 1 Success` == 0, `Trial 2 Success` == 1) %$% carotidconfidencepre, na.rm=T), 1)  
+)
+t1r8 <- c(
+  'Carotid Confidence Post',
+  round(mean(raw_data$carotidconfidencepost, na.rm=T), 1), 
+  round(mean(raw_data %>% filter(Group == 'Attending') %$% carotidconfidencepost, na.rm=T), 1), 
+  round(mean(raw_data %>% filter(Group=='Trainee') %$% carotidconfidencepost, na.rm=T), 1),
+  round(mean(raw_data %>% filter(`Trial 1 Success` == 0, `Trial 2 Success` == 1) %$% carotidconfidencepost, na.rm=T), 1)  
+)
+t1r9 <- c(
+  'General Confidence Pre',
+  round(mean(raw_data$generalconfidencepre, na.rm=T), 1), 
+  round(mean(raw_data %>% filter(Group == 'Attending') %$% generalconfidencepre, na.rm=T), 1), 
+  round(mean(raw_data %>% filter(Group=='Trainee') %$% generalconfidencepre, na.rm=T), 1),
+  round(mean(raw_data %>% filter(`Trial 1 Success` == 0, `Trial 2 Success` == 1) %$% generalconfidencepre, na.rm=T), 1)  
+)
+t1r10 <- c(
+  'General Confidence Post',
+  round(mean(raw_data$generalconfidencepost, na.rm=T), 1), 
+  round(mean(raw_data %>% filter(Group == 'Attending') %$% generalconfidencepost, na.rm=T), 1), 
+  round(mean(raw_data %>% filter(Group=='Trainee') %$% generalconfidencepost, na.rm=T), 1),
+  round(mean(raw_data %>% filter(`Trial 1 Success` == 0, `Trial 2 Success` == 1) %$% generalconfidencepost, na.rm=T), 1)  
+)
+
+rbind(
+  t1r7,
+  t1r8,
+  t1r9,
+  t1r10
+)
+```
+
+```{r}
+responded_real_icai <- raw_data %>% filter(!is.na(priorreal))
+
+t1r11 <- c(
+  'Real ICAI? (%)',
+  round(100*nrow(responded_real_icai %>% filter(priorreal == 1))/nrow(responded_real_icai),1), 
+  round(100*nrow(responded_real_icai %>% filter(priorreal == 1, Group == 'Attending'))/nrow(responded_real_icai %>% filter(Group == 'Attending')),1), 
+  round(100*nrow(responded_real_icai %>% filter(priorreal == 1, Group=='Trainee'))/nrow(responded_real_icai %>% filter(Group=='Trainee')),1),
+  round(100*nrow(responded_real_icai %>% filter(priorreal == 1, `Trial 1 Success` == 0, `Trial 2 Success` == 1))/nrow(responded_real_icai %>% filter(`Trial 1 Success` == 0, `Trial 2 Success` == 1)),1)  
+)
+
+responded_sim_icai <- raw_data %>% filter(!is.na(priorsim))
+
+t1r12 <- c(
+  'Simulated ICAI? (%)',
+  round(100*nrow(responded_sim_icai %>% filter(priorsim == 1))/nrow(responded_sim_icai),1), 
+  round(100*nrow(responded_sim_icai %>% filter(priorsim == 1, Group == 'Attending'))/nrow(responded_sim_icai %>% filter(Group == 'Attending')),1), 
+  round(100*nrow(responded_sim_icai %>% filter(priorsim == 1, Group=='Trainee'))/nrow(responded_sim_icai %>% filter(Group=='Trainee')),1),
+  round(100*nrow(responded_sim_icai %>% filter(priorsim == 1, `Trial 1 Success` == 0, `Trial 2 Success` == 1))/nrow(responded_sim_icai %>% filter(`Trial 1 Success` == 0, `Trial 2 Success` == 1)),1)  
+)
+
+responded_sim_prior <- raw_data %>% filter(!is.na(priorsim), !is.na(priorreal))
+
+t1r13 <- c(
+  'Real or Simulation ICAI? (%)',
+  round(100*nrow(responded_sim_prior %>% filter(priorreal == 1 | priorsim == 1))/nrow(responded_sim_prior),1), 
+  round(100*nrow(responded_sim_prior %>% filter(priorreal == 1 | priorsim == 1, Group == 'Attending'))/nrow(responded_sim_prior %>% filter(Group == 'Attending')),1), 
+  round(100*nrow(responded_sim_prior %>% filter(priorreal == 1 | priorsim == 1, Group=='Trainee'))/nrow(responded_sim_prior %>% filter(Group=='Trainee')),1),
+  round(100*nrow(responded_sim_prior %>% filter(priorreal == 1 | priorsim == 1, `Trial 1 Success` == 0, `Trial 2 Success` == 1))/nrow(responded_sim_prior %>% filter(`Trial 1 Success` == 0, `Trial 2 Success` == 1)),1)  
+)
+```
+
+```{r}
+format_table_mean_compare <- function(d, var1, var2) {
+  to <- t.test(d[,var1], d[,var2], paired=T)
+  improvement <- 100 - mean(d[,var2], na.rm=T)/mean(d[,var1], na.rm = T) * 100
+  return(paste0(round(to$estimate), ' (', round(to$conf.int[1]), '-', round(to$conf.int[2]), ') [', round(improvement), '%]'))
+}
+```
+
+```{r}
+# TTH Results
+t1r14 <- c(
+  'Trial 1 TTH',
+  round(mean(raw_data$`Trial 1 TTH`, na.rm=T), 1), 
+  round(mean(raw_data %>% filter(Group == 'Attending') %$% `Trial 1 TTH`, na.rm=T), 1), 
+  round(mean(raw_data %>% filter(Group=='Trainee') %$% `Trial 1 TTH`, na.rm=T), 1),
+  round(mean(raw_data %>% filter(`Trial 1 Success` == 0, `Trial 2 Success` == 1) %$% `Trial 1 TTH`, na.rm=T), 1)  
+)
+
+t1r15 <- c(
+  'Trial 2 TTH',
+  round(mean(raw_data$`Trial 2 TTH`, na.rm=T), 1), 
+  round(mean(raw_data %>% filter(Group == 'Attending') %$% `Trial 2 TTH`, na.rm=T), 1), 
+  round(mean(raw_data %>% filter(Group=='Trainee') %$% `Trial 2 TTH`, na.rm=T), 1),
+  round(mean(raw_data %>% filter(`Trial 1 Success` == 0, `Trial 2 Success` == 1) %$% `Trial 2 TTH`, na.rm=T), 1)  
+)
+
+t1r16 <- c(
+  'Difference (95% CI) [% Improvement]',
+  format_table_mean_compare(raw_data, 'Trial 1 TTH', 'Trial 2 TTH'), 
+  format_table_mean_compare(raw_data %>% filter(Group == 'Attending'), 'Trial 1 TTH', 'Trial 2 TTH'), 
+  format_table_mean_compare(raw_data %>% filter(Group=='Trainee'), 'Trial 1 TTH', 'Trial 2 TTH'),
+  format_table_mean_compare(raw_data %>% filter(`Trial 1 Success` == 0, `Trial 2 Success` == 1), 'Trial 1 TTH', 'Trial 2 TTH')  
+)
+
+# t1r17 <- c('% Improvement', round(100-100*as.numeric(t1r15[2:length(t1r15)])/as.numeric(t1r14[2:length(t1r15)])))
+```
+
+```{r}
+# TTH Results
+t1r18 <- c(
+  'Trial 1 EBL',
+  round(mean(raw_data$`trial 1 ebl`, na.rm=T), 1), 
+  round(mean(raw_data %>% filter(Group == 'Attending') %$% `trial 1 ebl`, na.rm=T), 1), 
+  round(mean(raw_data %>% filter(Group=='Trainee') %$% `trial 1 ebl`, na.rm=T), 1),
+  round(mean(raw_data %>% filter(`Trial 1 Success` == 0, `Trial 2 Success` == 1) %$% `trial 1 ebl`, na.rm=T), 1)  
+)
+
+t1r19 <- c(
+  'Trial 2 EBL',
+  round(mean(raw_data$`trial 2 ebl`, na.rm=T), 1), 
+  round(mean(raw_data %>% filter(Group == 'Attending') %$% `trial 2 ebl`, na.rm=T), 1), 
+  round(mean(raw_data %>% filter(Group=='Trainee') %$% `trial 2 ebl`, na.rm=T), 1),
+  round(mean(raw_data %>% filter(`Trial 1 Success` == 0, `Trial 2 Success` == 1) %$% `trial 2 ebl`, na.rm=T), 1)  
+)
+
+t1r20 <- c(
+  'Difference (95% CI) [% Improvement]',
+  format_table_mean_compare(raw_data, 'trial 1 ebl', 'trial 2 ebl'), 
+  format_table_mean_compare(raw_data %>% filter(Group == 'Attending'), 'trial 1 ebl', 'trial 2 ebl'), 
+  format_table_mean_compare(raw_data %>% filter(Group=='Trainee'), 'trial 1 ebl', 'trial 2 ebl'),
+  format_table_mean_compare(raw_data %>% filter(`Trial 1 Success` == 0, `Trial 2 Success` == 1), 'trial 1 ebl', 'trial 2 ebl')  
+)
+
+# t1r21 <- c('% Improvement', round(100-100*as.numeric(t1r19[2:length(t1r19)])/as.numeric(t1r18[2:length(t1r18)])))
+```
+
+```{r}
+# TTH Results
+t1r22 <- c(
+  'Trial 1 Success',
+  round(100*nrow(raw_data %>% filter(`Trial 1 Success`==1))/nrow(raw_data), 1), 
+  round(100*nrow(raw_data %>% filter(`Trial 1 Success`==1, Group=='Attending'))/nrow(raw_data %>% filter(Group=='Attending')), 1), 
+  round(100*nrow(raw_data %>% filter(`Trial 1 Success`==1, Group=='Trainee'))/nrow(raw_data %>% filter(Group=='Trainee')), 1), 
+  0 
+)
+
+t1r23 <- c(
+  'Trial 2 Success',
+  round(100*nrow(raw_data %>% filter(`Trial 2 Success`==1))/nrow(raw_data), 1), 
+  round(100*nrow(raw_data %>% filter(`Trial 2 Success`==1, Group=='Attending'))/nrow(raw_data %>% filter(Group=='Attending')), 1), 
+  round(100*nrow(raw_data %>% filter(`Trial 2 Success`==1, Group=='Trainee'))/nrow(raw_data %>% filter(Group=='Trainee')), 1), 
+  100
+)
+```
+
+```{r}
+rbind(t1r1,
+  t1r2,
+  t1r3,
+  t1r4,
+  t1r5,
+  t1r6,
+  t1r7,
+  t1r8,
+  t1r9,
+  t1r10,
+  t1r11 %>% c(.[1], paste0(.[2:length(.)], '%')) %>% .[6:length(.)],
+  t1r12 %>% c(.[1], paste0(.[2:length(.)], '%')) %>% .[6:length(.)],
+  t1r13 %>% c(.[1], paste0(.[2:length(.)], '%')) %>% .[6:length(.)],
+  t1r14,
+  t1r15,
+  t1r16,
+  t1r17,
+  t1r18,
+  t1r19,
+  t1r20,
+  t1r21,
+  t1r22 %>% c(.[1], paste0(.[2:length(.)], '%')) %>% .[6:length(.)],
+  t1r23 %>% c(.[1], paste0(.[2:length(.)], '%')) %>% .[6:length(.)]
+  ) %>% write.table(.,file = file.path(source_dir, 'figures', 'table1.tsv'), sep='\t', quote=F, row.names=F)
+```
+
