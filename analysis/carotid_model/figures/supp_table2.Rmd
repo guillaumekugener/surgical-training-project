@@ -1,0 +1,119 @@
+---
+title: "Supplemental Table 3"
+author: "Guillaume Kugener"
+date: "5/16/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+source('~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/carotid_model/preprocess_data.R')
+library(xtable)
+```
+
+```{r}
+compare_sites_data <- raw_data %>% 
+  mutate(dd=format(as.Date(`Start Date`), format='%Y-%m')) %>%
+  mutate(SiteGroup=ifelse(is.na(dd), Source, paste0(Source, '_', dd))) %>%
+  mutate(SiteGroup2=case_when(
+    Source == 'Emory' ~ 'Emory',
+    grepl('[0-9][0-9]$', SurveyID) ~ paste0('USC', gsub('[0-9][0-9]$', '', SurveyID)),
+    SurveyID %in% c('314c', '320b') ~ 'USC3', 
+    TRUE ~ 'None'
+  )) %>% 
+  mutate(SiteGroup2=gsub('USCUSC1', 'USC120+', SiteGroup2))
+```
+
+```{r}
+site_level_simulation_experience <- compare_sites_data %>%
+  dplyr::select(SiteGroup2, 
+    `Anatomy is realistic`, 
+    `Tissue feel is realistic`, 
+    `Depth perception is realistic`, 
+    `Instrument application is realistic`, 
+    `Image projection and graphics are realistic`) %>%
+  group_by(SiteGroup2) %>%
+  dplyr::summarise_if(is.numeric, list(~round(mean(., na.rm=T), 1), ~length(.[!is.na(.)]))) %>%
+  gather(var, value, -SiteGroup2) %>%
+  mutate(var_true=gsub('.*_', '', var)) %>%
+  mutate(var=gsub('_.*', '', var)) %>%
+  spread(var_true, value) %>%
+  mutate(Group='Simulation Experience')
+
+site_level_simulation_utility <- compare_sites_data %>%
+  dplyr::select("SiteGroup2",
+    "This model is useful for teaching anatomy",
+    "This model is useful for teaching surgical planning",
+    "This model is useful for teaching operative technique",
+    "This model is useful for improving hand-eye coordination",
+    "This model is useful as an overall training tool",
+    "This model is useful for teaching carotid artery injury repair",
+    "Skills learned are transferrable to the operating room",
+    "This model should be incorporated into a training curriculum",
+    "I would recommend this model to trainees") %>%
+  group_by(SiteGroup2) %>%
+  dplyr::summarise_if(is.numeric, list(~round(mean(., na.rm=T), 1), ~length(.[!is.na(.)]))) %>%
+  gather(var, value, -SiteGroup2) %>%
+  mutate(var_true=gsub('.*_', '', var)) %>%
+  mutate(var=gsub('_.*', '', var)) %>%
+  spread(var_true, value) %>%
+  mutate(Group='Simulation Utility')
+
+sim_exp_clean_names <- c(
+  "This model is useful for teaching anatomy"="To teach anatomy",
+  "This model is useful for teaching surgical planning"="To teach surgical planning",
+  "This model is useful for teaching operative technique"="To teach operative technique",
+  "This model is useful for improving hand-eye coordination"="Improving hand-eye coordination",
+  "This model is useful as an overall training tool"="To teach carotid artery injury repair",
+  "This model is useful for teaching carotid artery injury repair"="As overall training tool",
+  "Skills learned are transferrable to the operating room"="Skills learned are transferrable to the operating room",
+  "This model should be incorporated into a training curriculum"="This model should be incorporated into a training curriculum",
+  "I would recommend this model to trainees"="I would recommend this model to trainees"
+)
+
+site_level_simulation_utility %<>% mutate(var=sim_exp_clean_names[var])
+```
+
+```{r}
+library(gt)
+library(glue)
+```
+
+```{r}
+supp_tab3_data_all <- rbind(site_level_simulation_experience, site_level_simulation_utility) %>%
+  arrange(SiteGroup2, var) %>%
+  # dplyr::select(-Group) %>%
+  filter(!length==0) %>%
+  group_by(SiteGroup2) %>%
+  dplyr::mutate(tot_n=max(length)) %>%
+  ungroup() %>%
+  mutate(SiteGroup2 = paste0(SiteGroup2, ' (n=', tot_n, ')')) %>%
+  reshape2::dcast(var ~ SiteGroup2, value.var='round') %>%
+  mutate(SurveyQ=var) %>%
+  dplyr::select(-var) %>%
+  dplyr::select(SurveyQ, everything())
+
+order_of_questions <- c(
+  'Anatomy is realistic',
+  'Depth perception is realistic',
+  'Image projection and graphics are realistic',
+  'Instrument application is realistic',
+  'Tissue feel is realistic',
+  'I would recommend this model to trainees',
+  'Skills learned are transferrable to the operating room',
+  'To teach carotid artery injury repair',
+  'Improving hand-eye coordination',
+  'To teach anatomy',
+  'As overall training tool',
+  'To teach operative technique',
+  'To teach surgical planning',
+  'This model should be incorporated into a training curriculum'
+)
+
+supp_tab3_data_all %<>% 
+  mutate(SurveyQ=factor(SurveyQ, levels=order_of_questions)) %>%
+  arrange(SurveyQ) %>%
+  set_colnames(gsub('USC', 'Site ', colnames(.)))
+
+supp_tab3_data_all %>% write.table(., file = file.path(source_dir, 'figures', 'supp_table3.tsv'), sep = '\t', row.names=F, quote = F)  
+```

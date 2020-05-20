@@ -1,0 +1,291 @@
+---
+title: 'Supp Table 1: Surgeon Performance in Managing Simulated ICAI'
+author: "Guillaume Kugener"
+date: "5/16/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+source('~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/carotid_model/preprocess_data.R')
+```
+
+```{r}
+all_fails <- raw_data %>% filter(`Trial 1 Success`==0, `Trial 2 Success`==0) %$% SurveyID
+training_rescues <- raw_data %>% filter(`Trial 1 Success`==0, `Trial 2 Success`==1) %$% SurveyID
+both_success <- raw_data %>% filter(`Trial 1 Success`==1, `Trial 2 Success`==1) %$% SurveyID
+
+# One person does not have a trial 2 ebl
+ebl_miq_cutoff <- raw_data %>% 
+  mutate(change_ebl=`trial 2 ebl` - `trial 1 ebl`) %>%
+  filter(!is.na(change_ebl)) %$%
+  quantile(change_ebl, c(0.25))
+
+ebl_miq <- raw_data %>% 
+  filter(!is.na(`trial 2 ebl`)) %>%
+  filter(`trial 2 ebl` - `trial 1 ebl` < ebl_miq_cutoff) %$% SurveyID
+out_ebl_miq <- raw_data %>% 
+  filter(!is.na(`trial 2 ebl`)) %>%
+  filter(!(`trial 2 ebl` - `trial 1 ebl` < ebl_miq_cutoff)) %$% SurveyID
+```
+
+```{r}
+raw_data %>% 
+  # dplyr::select(SurveyID, `Trial 1 TTH`, `Trial 2 TTH`) %>%
+  filter(SurveyID %in% training_rescues) %$%
+  t.test(`trial 1 ebl`, `trial 2 ebl`, paired = T)
+```
+
+```{r}
+# Build a table from the raw data
+
+suppt1_columns <- c('', 'Overall', 'Attendings', 'Trainees', 'Training Targets')
+suppt1r1 <- c(
+  '',
+  nrow(raw_data %>% filter(SurveyID %in% all_fails)), 
+  nrow(raw_data %>% filter(SurveyID %in% training_rescues)), 
+  nrow(raw_data %>% filter(SurveyID %in% both_success)),
+  nrow(raw_data %>% filter(SurveyID %in% ebl_miq)),
+  nrow(raw_data %>% filter(SurveyID %in% out_ebl_miq))
+)
+suppt1r2 <- c(
+  'Attenings',
+  nrow(raw_data %>% filter(Group=='Attending', SurveyID %in% all_fails)), 
+  nrow(raw_data %>% filter(Group=='Attending', SurveyID %in% training_rescues)), 
+  nrow(raw_data %>% filter(Group=='Attending', SurveyID %in% both_success)),
+  nrow(raw_data %>% filter(Group=='Attending', SurveyID %in% ebl_miq)),
+  nrow(raw_data %>% filter(Group=='Attending', SurveyID %in% out_ebl_miq))
+)
+suppt1r3 <- c(
+  'Trainees',
+  nrow(raw_data %>% filter(Group=='Trainee', SurveyID %in% all_fails)), 
+  nrow(raw_data %>% filter(Group=='Trainee', SurveyID %in% training_rescues)), 
+  nrow(raw_data %>% filter(Group=='Trainee', SurveyID %in% both_success)),
+  nrow(raw_data %>% filter(Group=='Trainee', SurveyID %in% ebl_miq)),
+  nrow(raw_data %>% filter(Group=='Trainee', SurveyID %in% out_ebl_miq))
+)
+suppt1r4 <- c(
+  'Years',
+  round(mean(raw_data %>% filter(SurveyID %in% all_fails) %$% Totyears, na.rm = T), 1), 
+  round(mean(raw_data %>% filter(SurveyID %in% training_rescues) %$% Totyears, na.rm = T), 1),
+  round(mean(raw_data %>% filter(SurveyID %in% both_success) %$% Totyears, na.rm = T), 1),
+  round(mean(raw_data %>% filter(SurveyID %in% ebl_miq) %$% Totyears, na.rm = T), 1),
+  round(mean(raw_data %>% filter(SurveyID %in% out_ebl_miq) %$% Totyears, na.rm = T), 1)
+)
+```
+
+```{r}
+suppt1r5 <- c(
+  'No. Endoscopic Cases',
+  round(mean(raw_data %>% filter(SurveyID %in% all_fails) %$% endolast12mo, na.rm = T), 1), 
+  round(mean(raw_data %>% filter(SurveyID %in% training_rescues) %$% endolast12mo, na.rm = T), 1),
+  round(mean(raw_data %>% filter(SurveyID %in% both_success) %$% endolast12mo, na.rm = T), 1),
+  round(mean(raw_data %>% filter(SurveyID %in% ebl_miq) %$% endolast12mo, na.rm = T), 1),
+  round(mean(raw_data %>% filter(SurveyID %in% out_ebl_miq) %$% endolast12mo, na.rm = T), 1)
+)
+
+suppt1r6 <- c(
+  'No. Cadaveric Cases',
+  round(mean(raw_data %>% filter(SurveyID %in% all_fails) %$% cadaverlast12, na.rm = T), 1), 
+  round(mean(raw_data %>% filter(SurveyID %in% training_rescues) %$% cadaverlast12, na.rm = T), 1),
+  round(mean(raw_data %>% filter(SurveyID %in% both_success) %$% cadaverlast12, na.rm = T), 1),
+  round(mean(raw_data %>% filter(SurveyID %in% ebl_miq) %$% cadaverlast12, na.rm = T), 1),
+  round(mean(raw_data %>% filter(SurveyID %in% out_ebl_miq) %$% cadaverlast12, na.rm = T), 1) 
+)
+```
+
+```{r}
+suppt1r7 <- c(
+  'Carotid Confidence Pre',
+  round(mean(raw_data %>% filter(SurveyID %in% all_fails) %$% carotidconfidencepre, na.rm = T), 1), 
+  round(mean(raw_data %>% filter(SurveyID %in% training_rescues) %$% carotidconfidencepre, na.rm = T), 1),
+  round(mean(raw_data %>% filter(SurveyID %in% both_success) %$% carotidconfidencepre, na.rm = T), 1),
+  round(mean(raw_data %>% filter(SurveyID %in% ebl_miq) %$% carotidconfidencepre, na.rm = T), 1),
+  round(mean(raw_data %>% filter(SurveyID %in% out_ebl_miq) %$% carotidconfidencepre, na.rm = T), 1) 
+)
+suppt1r8 <- c(
+  'Carotid Confidence Post',
+  round(mean(raw_data %>% filter(SurveyID %in% all_fails) %$% carotidconfidencepost, na.rm = T), 1), 
+  round(mean(raw_data %>% filter(SurveyID %in% training_rescues) %$% carotidconfidencepost, na.rm = T), 1),
+  round(mean(raw_data %>% filter(SurveyID %in% both_success) %$% carotidconfidencepost, na.rm = T), 1),
+  round(mean(raw_data %>% filter(SurveyID %in% ebl_miq) %$% carotidconfidencepost, na.rm = T), 1),
+  round(mean(raw_data %>% filter(SurveyID %in% out_ebl_miq) %$% carotidconfidencepost, na.rm = T), 1) 
+)
+suppt1r9 <- c(
+  'General Confidence Pre',
+  round(mean(raw_data %>% filter(SurveyID %in% all_fails) %$% generalconfidencepre, na.rm = T), 1), 
+  round(mean(raw_data %>% filter(SurveyID %in% training_rescues) %$% generalconfidencepre, na.rm = T), 1),
+  round(mean(raw_data %>% filter(SurveyID %in% both_success) %$% generalconfidencepre, na.rm = T), 1),
+  round(mean(raw_data %>% filter(SurveyID %in% ebl_miq) %$% generalconfidencepre, na.rm = T), 1),
+  round(mean(raw_data %>% filter(SurveyID %in% out_ebl_miq) %$% generalconfidencepre, na.rm = T), 1) 
+)
+suppt1r10 <- c(
+  'General Confidence Post',
+  round(mean(raw_data %>% filter(SurveyID %in% all_fails) %$% generalconfidencepost, na.rm = T), 1), 
+  round(mean(raw_data %>% filter(SurveyID %in% training_rescues) %$% generalconfidencepost, na.rm = T), 1),
+  round(mean(raw_data %>% filter(SurveyID %in% both_success) %$% generalconfidencepost, na.rm = T), 1),
+  round(mean(raw_data %>% filter(SurveyID %in% ebl_miq) %$% generalconfidencepost, na.rm = T), 1),
+  round(mean(raw_data %>% filter(SurveyID %in% out_ebl_miq) %$% generalconfidencepost, na.rm = T), 1) 
+)
+
+rbind(
+  suppt1r7,
+  suppt1r8,
+  suppt1r9,
+  suppt1r10
+)
+```
+
+```{r}
+responded_real_icai <- raw_data %>% filter(!is.na(priorreal))
+
+suppt1r11 <- c(
+  'Real ICAI? (%)',
+  round(100*nrow(responded_real_icai %>% filter(priorreal == 1, SurveyID %in% all_fails))/nrow(responded_real_icai %>% filter(SurveyID %in% all_fails)),1), 
+  round(100*nrow(responded_real_icai %>% filter(priorreal == 1, SurveyID %in% training_rescues))/nrow(responded_real_icai %>% filter(SurveyID %in% training_rescues)),1), 
+  round(100*nrow(responded_real_icai %>% filter(priorreal == 1, SurveyID %in% both_success))/nrow(responded_real_icai %>% filter(SurveyID %in% both_success)),1), 
+  round(100*nrow(responded_real_icai %>% filter(priorreal == 1, SurveyID %in% ebl_miq))/nrow(responded_real_icai %>% filter(SurveyID %in% ebl_miq)),1), 
+  round(100*nrow(responded_real_icai %>% filter(priorreal == 1, SurveyID %in% out_ebl_miq))/nrow(responded_real_icai %>% filter(SurveyID %in% out_ebl_miq)),1)
+)
+
+responded_sim_icai <- raw_data %>% filter(!is.na(priorsim))
+
+suppt1r12 <- c(
+  'Simulated ICAI? (%)',
+  round(100*nrow(responded_real_icai %>% filter(priorsim == 1, SurveyID %in% all_fails))/nrow(responded_real_icai %>% filter(SurveyID %in% all_fails)),1), 
+  round(100*nrow(responded_real_icai %>% filter(priorsim == 1, SurveyID %in% training_rescues))/nrow(responded_real_icai %>% filter(SurveyID %in% training_rescues)),1), 
+  round(100*nrow(responded_real_icai %>% filter(priorsim == 1, SurveyID %in% both_success))/nrow(responded_real_icai %>% filter(SurveyID %in% both_success)),1), 
+  round(100*nrow(responded_real_icai %>% filter(priorsim == 1, SurveyID %in% ebl_miq))/nrow(responded_real_icai %>% filter(SurveyID %in% ebl_miq)),1), 
+  round(100*nrow(responded_real_icai %>% filter(priorsim == 1, SurveyID %in% out_ebl_miq))/nrow(responded_real_icai %>% filter(SurveyID %in% out_ebl_miq)),1)
+)
+
+responded_sim_prior <- raw_data %>% filter(!is.na(priorsim), !is.na(priorreal))
+
+suppt1r13 <- c(
+  'Real or Simulation ICAI? (%)',
+  round(100*nrow(responded_real_icai %>% filter(priorsim==1 | priorreal == 1, SurveyID %in% all_fails))/nrow(responded_real_icai %>% filter(SurveyID %in% all_fails)),1), 
+  round(100*nrow(responded_real_icai %>% filter(priorsim==1 | priorreal == 1, SurveyID %in% training_rescues))/nrow(responded_real_icai %>% filter(SurveyID %in% training_rescues)),1), 
+  round(100*nrow(responded_real_icai %>% filter(priorsim==1 | priorreal == 1, SurveyID %in% both_success))/nrow(responded_real_icai %>% filter(SurveyID %in% both_success)),1), 
+  round(100*nrow(responded_real_icai %>% filter(priorsim==1 | priorreal == 1, SurveyID %in% ebl_miq))/nrow(responded_real_icai %>% filter(SurveyID %in% ebl_miq)),1), 
+  round(100*nrow(responded_real_icai %>% filter(priorsim==1 | priorreal == 1, SurveyID %in% out_ebl_miq))/nrow(responded_real_icai %>% filter(SurveyID %in% out_ebl_miq)),1)
+)
+```
+
+```{r}
+format_table_mean_compare <- function(d, var1, var2) {
+  to <- t.test(d[,var1], d[,var2], paired=T)
+  improvement <- 100 - mean(d[,var2], na.rm=T)/mean(d[,var1], na.rm = T) * 100
+  return(paste0(round(to$estimate), ' (', round(to$conf.int[1]), '-', round(to$conf.int[2]), ') [', round(improvement), '%]'))
+}
+```
+
+```{r}
+# TTH Results
+suppt1r14 <- c(
+  'Trial 1 TTH',
+  round(mean(raw_data %>% filter(SurveyID %in% all_fails) %$% `Trial 1 TTH`, na.rm = T), 1), 
+  round(mean(raw_data %>% filter(SurveyID %in% training_rescues) %$% `Trial 1 TTH`, na.rm = T), 1),
+  round(mean(raw_data %>% filter(SurveyID %in% both_success) %$% `Trial 1 TTH`, na.rm = T), 1),
+  round(mean(raw_data %>% filter(SurveyID %in% ebl_miq) %$% `Trial 1 TTH`, na.rm = T), 1),
+  round(mean(raw_data %>% filter(SurveyID %in% out_ebl_miq) %$% `Trial 1 TTH`, na.rm = T), 1) 
+)
+
+suppt1r15 <- c(
+  'Trial 2 TTH',
+  round(mean(raw_data %>% filter(SurveyID %in% all_fails) %$% `Trial 2 TTH`, na.rm = T), 1), 
+  round(mean(raw_data %>% filter(SurveyID %in% training_rescues) %$% `Trial 2 TTH`, na.rm = T), 1),
+  round(mean(raw_data %>% filter(SurveyID %in% both_success) %$% `Trial 2 TTH`, na.rm = T), 1),
+  round(mean(raw_data %>% filter(SurveyID %in% ebl_miq) %$% `Trial 2 TTH`, na.rm = T), 1),
+  round(mean(raw_data %>% filter(SurveyID %in% out_ebl_miq) %$% `Trial 2 TTH`, na.rm = T), 1) 
+)
+
+suppt1r16 <- c(
+  'Difference (95% CI) [% Improvement]',
+  '0 (0-0) [0%]',
+  format_table_mean_compare(raw_data %>% filter(SurveyID %in% training_rescues), 'Trial 1 TTH', 'Trial 2 TTH'), 
+  format_table_mean_compare(raw_data %>% filter(SurveyID %in% both_success), 'Trial 1 TTH', 'Trial 2 TTH'), 
+  format_table_mean_compare(raw_data %>% filter(SurveyID %in% ebl_miq), 'Trial 1 TTH', 'Trial 2 TTH'), 
+  format_table_mean_compare(raw_data %>% filter(SurveyID %in% out_ebl_miq), 'Trial 1 TTH', 'Trial 2 TTH')
+)
+
+# suppt1r17 <- c('% Improvement', round(100-100*as.numeric(suppt1r15[2:length(suppt1r15)])/as.numeric(suppt1r14[2:length(suppt1r15)])))
+```
+
+```{r}
+# TTH Results
+suppt1r18 <- c(
+  'Trial 1 EBL',
+  round(mean(raw_data %>% filter(SurveyID %in% all_fails) %$% `trial 1 ebl`, na.rm = T), 1), 
+  round(mean(raw_data %>% filter(SurveyID %in% training_rescues) %$% `trial 1 ebl`, na.rm = T), 1),
+  round(mean(raw_data %>% filter(SurveyID %in% both_success) %$% `trial 1 ebl`, na.rm = T), 1),
+  round(mean(raw_data %>% filter(SurveyID %in% ebl_miq) %$% `trial 1 ebl`, na.rm = T), 1),
+  round(mean(raw_data %>% filter(SurveyID %in% out_ebl_miq) %$% `trial 1 ebl`, na.rm = T), 1) 
+)
+
+suppt1r19 <- c(
+  'Trial 2 EBL',
+  round(mean(raw_data %>% filter(SurveyID %in% all_fails) %$% `trial 2 ebl`, na.rm = T), 1), 
+  round(mean(raw_data %>% filter(SurveyID %in% training_rescues) %$% `trial 2 ebl`, na.rm = T), 1),
+  round(mean(raw_data %>% filter(SurveyID %in% both_success) %$% `trial 2 ebl`, na.rm = T), 1),
+  round(mean(raw_data %>% filter(SurveyID %in% ebl_miq) %$% `trial 2 ebl`, na.rm = T), 1),
+  round(mean(raw_data %>% filter(SurveyID %in% out_ebl_miq) %$% `trial 2 ebl`, na.rm = T), 1) 
+)
+
+suppt1r20 <- c(
+  'Difference (95% CI) [% Improvement]',
+  format_table_mean_compare(raw_data %>% filter(SurveyID %in% all_fails), 'trial 1 ebl', 'trial 2 ebl'), 
+  format_table_mean_compare(raw_data %>% filter(SurveyID %in% training_rescues), 'trial 1 ebl', 'trial 2 ebl'), 
+  format_table_mean_compare(raw_data %>% filter(SurveyID %in% both_success), 'trial 1 ebl', 'trial 2 ebl'), 
+  format_table_mean_compare(raw_data %>% filter(SurveyID %in% ebl_miq), 'trial 1 ebl', 'trial 2 ebl'), 
+  format_table_mean_compare(raw_data %>% filter(SurveyID %in% out_ebl_miq), 'trial 1 ebl', 'trial 2 ebl')
+)
+
+# suppt1r21 <- c('% Improvement', round(100-100*as.numeric(suppt1r19[2:length(suppt1r19)])/as.numeric(suppt1r18[2:length(suppt1r18)])))
+```
+
+```{r}
+# TTH Results
+suppt1r22 <- c(
+  'Trial 1 Success',
+  round(100*nrow(raw_data %>% filter(`Trial 1 Success`==1, SurveyID %in% all_fails))/nrow(raw_data %>% filter(SurveyID %in% all_fails)), 1), 
+  round(100*nrow(raw_data %>% filter(`Trial 1 Success`==1, SurveyID %in% training_rescues))/nrow(raw_data %>% filter(SurveyID %in% training_rescues)), 1), 
+  round(100*nrow(raw_data %>% filter(`Trial 1 Success`==1, SurveyID %in% both_success))/nrow(raw_data %>% filter(SurveyID %in% both_success)), 1), 
+  round(100*nrow(raw_data %>% filter(`Trial 1 Success`==1, SurveyID %in% ebl_miq))/nrow(raw_data %>% filter(SurveyID %in% ebl_miq)), 1), 
+  round(100*nrow(raw_data %>% filter(`Trial 1 Success`==1, SurveyID %in% out_ebl_miq))/nrow(raw_data %>% filter(SurveyID %in% out_ebl_miq)), 1)
+)
+
+suppt1r23 <- c(
+  'Trial 2 Success',
+  round(100*nrow(raw_data %>% filter(`Trial 2 Success`==1, SurveyID %in% all_fails))/nrow(raw_data %>% filter(SurveyID %in% all_fails)), 1), 
+  round(100*nrow(raw_data %>% filter(`Trial 2 Success`==1, SurveyID %in% training_rescues))/nrow(raw_data %>% filter(SurveyID %in% training_rescues)), 1), 
+  round(100*nrow(raw_data %>% filter(`Trial 2 Success`==1, SurveyID %in% both_success))/nrow(raw_data %>% filter(SurveyID %in% both_success)), 1), 
+  round(100*nrow(raw_data %>% filter(`Trial 2 Success`==1, SurveyID %in% ebl_miq))/nrow(raw_data %>% filter(SurveyID %in% ebl_miq)), 1), 
+  round(100*nrow(raw_data %>% filter(`Trial 2 Success`==1, SurveyID %in% out_ebl_miq))/nrow(raw_data %>% filter(SurveyID %in% out_ebl_miq)), 1)
+)
+```
+
+```{r}
+rbind(suppt1r1,
+  suppt1r2,
+  suppt1r3,
+  suppt1r4,
+  suppt1r5,
+  suppt1r6,
+  suppt1r11 %>% c(.[1], paste0(.[2:length(.)], '%')) %>% .[7:length(.)],
+  suppt1r12 %>% c(.[1], paste0(.[2:length(.)], '%')) %>% .[7:length(.)],
+  suppt1r13 %>% c(.[1], paste0(.[2:length(.)], '%')) %>% .[7:length(.)],
+  suppt1r7,
+  suppt1r8,
+  suppt1r9,
+  suppt1r10,
+  suppt1r14,
+  suppt1r15,
+  suppt1r16,
+  suppt1r18,
+  suppt1r19,
+  suppt1r20,
+  suppt1r22 %>% c(.[1], paste0(.[2:length(.)], '%')) %>% .[7:length(.)],
+  suppt1r23 %>% c(.[1], paste0(.[2:length(.)], '%')) %>% .[7:length(.)]
+  ) %>% write.table(.,file = file.path(source_dir, 'figures', 'supp_table1.tsv'), sep='\t', quote=F, row.names=F)
+```
+

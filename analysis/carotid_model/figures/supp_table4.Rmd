@@ -1,0 +1,150 @@
+---
+title: "Table 4"
+author: "Guillaume Kugener"
+date: "5/18/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+source('~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/carotid_model/preprocess_data.R')
+```
+
+```{r}
+# Multivariable
+```
+
+## General demographics table
+
+```{r}
+# logistic regression - what predicts trial 1 success from a set of variables that we have
+pred_logisit_data <- raw_data %>%
+  dplyr::select(
+    SurveyID, Group, Source, Specialty,
+    `Trial 1 Success`, `Trial 2 Success`,
+    `Trial 1 TTH`, `Trial 2 TTH`, `trial 1 ebl`, `trial 2 ebl`,
+    generalconfidencepre, generalconfidencepost,
+    carotidconfidencepre, carotidconfidencepost,
+    priorreal, priorsim,
+    Totyears, Attyears, endolast12mo, cadaverlast12
+  ) %>% mutate(Group=factor(Group)) %>%
+  mutate(Attyears=ifelse(Group=='Trainee', 0, Attyears)) %>%
+  mutate(Totyears=log2(Totyears))
+```
+
+```{r}
+continuous_variables <- c(
+  'generalconfidencepre', 'generalconfidencepost',
+  'carotidconfidencepre', 'carotidconfidencepost',
+  'Totyears', 'Attyears',
+  'endolast12mo', 'cadaverlast12'
+)
+
+categorical_variables <- c(
+  'Group', 'priorreal', 'priorsim', 'Specialty'
+)
+```
+
+```{r}
+compute_odds_clean <- function(d, pred, var) {
+  # Run logistic regression
+  mfit <- glm(as.formula(paste0('`', pred, '`', ' ~ ', var)), data=d, family = 'binomial')
+  conf_int <- confint(mfit) %>% .[2,]
+  out <- cbind(
+    data.frame(pred=pred,
+      var=var,
+      estimate = (coef(summary(mfit))[2, 'Estimate']),
+      p = coef(summary(mfit))[2, 'Pr(>|z|)'],
+      stringsAsFactors = F
+    ), data.frame(
+      ci_2.5=conf_int['2.5 %'], 
+      ci_97.5=conf_int['97.5 %']))
+  row.names(out) <- NULL
+  return(out)
+}
+```
+
+## Create a table of univariate analysis compared to trial success
+
+```{r}
+# Predict for trial 1
+outputs_trial1 <- NULL
+for (cv in c(categorical_variables, continuous_variables)) {
+  d <- pred_logisit_data
+  if (cv == 'Specialty') {
+    d %<>% filter(Specialty %in% c('Neurosurgery', 'Otolaryngology'))
+  }
+  outputs_trial1 %<>% rbind(compute_odds_clean(d, 'Trial 1 Success', cv))
+}
+
+outputs_trial2 <- NULL
+for (cv in c(categorical_variables, continuous_variables)) {
+  d <- pred_logisit_data
+  if (cv == 'Specialty') {
+    d %<>% filter(Specialty %in% c('Neurosurgery', 'Otolaryngology'))
+  }
+  outputs_trial2 %<>% rbind(compute_odds_clean(d, 'Trial 2 Success', cv))
+}
+
+rbind(outputs_trial1, outputs_trial2) %>%
+  filter(!grepl('confidence', var)) %>%
+  mutate(OR=paste0(
+    round(exp(estimate), 2), 
+    ' (', round(exp(ci_2.5), 2), '-', round(exp(ci_97.5), 2), ')'
+  )) %>%
+  dplyr::select(pred, var, OR, p) %>%
+  mutate(p=case_when(
+    p < 0.0001 ~ 'p < 0.0001',
+    p < 0.05 ~ paste0('p = ', round(p, 3)),
+    TRUE ~ 'ns'
+  )) %>%
+  setDT() %>% dcast(var ~ pred, value.var=c('OR', 'p')) %>%
+  dplyr::select(var, colnames(.)[grep('Trial 1', colnames(.))], colnames(.)[grep('Trial 2', colnames(.))]) %>%
+  mutate(var=factor(var, levels=c('Group', 'Totyears', 'Attyears', 'Specialty', 'priorreal', 'priorsim', 'endolast12mo', 'cadaverlast12'))) %>%
+  arrange(var) %>%
+  write.table(., file=file.path(source_dir, 'figures', 'univ_table.tsv'), sep='\t', quote=F, row.names=F)
+```
+
+```{r}
+# Multivariable
+outputs_multi <- NULL
+for (pred in c('Trial 1 Success', 'Trial 2 Success')) {
+  multi_mfit <- glm(
+  as.formula(paste0('`', pred,'` ~ Group + carotidconfidencepre + carotidconfidencepost')), 
+  data=pred_logisit_data, family = 'binomial')
+
+  outputs_multi %<>% rbind(coefficients(summary(multi_mfit)) %>%
+    as.data.frame() %>%
+    mutate(v=row.names(.)) %>%
+    inner_join(., 
+      confint(multi_mfit) %>% 
+        as.data.frame() %>%
+        mutate(v=row.names(.)),
+      by = 'v'
+    ) %>% mutate(pr=pred))
+}
+outputs_multi %>%
+  mutate(OR=paste0(
+    round(exp(Estimate), 2), 
+    ' (', round(exp(`2.5 %`), 2), '-', round(exp(`97.5 %`), 2), ')'
+  )) %>%
+  filter(v != '(Intercept)') %>%
+  dplyr::select(pr, v, OR, p=`Pr(>|z|)`) %>%
+  mutate(p=case_when(
+    p < 0.0001 ~ 'p < 0.0001',
+    p < 0.05 ~ paste0('p = ', round(p, 3)),
+    TRUE ~ 'ns'
+  )) %>%
+  setDT() %>%
+  dcast(v ~ pr, value.var=c('OR', 'p')) %>%
+  mutate(v=factor(v, levels=c('GroupTrainee', 'carotidconfidencepre', 'carotidconfidencepost'))) %>%
+  arrange(v) %>%
+  dplyr::select(v, colnames(.)[grep('Trial 1', colnames(.))], colnames(.)[grep('Trial 2', colnames(.))]) %>%
+  write.table(.,file = file.path(source_dir, 'figures', 'multi_table.tsv'), sep='\t', quote=F, row.names=F)
+```
+
+
+
+
+
+
