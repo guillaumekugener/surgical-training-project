@@ -10,23 +10,29 @@ import os
 import time
 import tqdm
 
+from absl import app, flags, logging
+from absl.flags import FLAGS
+
 from math import ceil, floor
 
 from lxml import etree
 
-ANNOTATION_DIR = sys.argv[1]
-OUTPUT_DIR = sys.argv[2]
-IMG_SIZE = 200 # What it was rescaled to
+flags.DEFINE_string('source', '', 'path to annotation directory')
+flags.DEFINE_string('output', '','path to output directory')
+flags.DEFINE_string('original_size', '1280x720', 'size of original image (pass as NNNxNNN)')
+flags.DEFINE_integer('size', 200, 'resize images to')
+flags.DEFINE_integer('buffer', 10, 'adds a buffer to the cropping')
+
+FLAGS(sys.argv)
+
+ANNOTATION_DIR = FLAGS.source
+OUTPUT_DIR = FLAGS.output
+IMG_SIZE = FLAGS.size
+image_shape = [int(i) for i in FLAGS.original_size.split('x')]
 
 all_frames = [a for a in os.listdir(ANNOTATION_DIR)]
 
-frame_counter = 0
-start_time = time.time()
 for a in tqdm.tqdm(all_frames):
-	# if frame_counter % 1000 == 0:
-	# 	print('Processed: ' + str(frame_counter) + '/' + str(len(all_frames)) + ' (' + str(ceil(time.time()-start_time)) + ')')
-	# frame_counter += 1
-
 	# Overlay the fixed annotations on the rescaled image
 	annotation_xml = etree.parse(os.path.join(ANNOTATION_DIR, a))
 
@@ -40,12 +46,13 @@ for a in tqdm.tqdm(all_frames):
 			og_h = float(sn.text)
 			sn.text = str(IMG_SIZE) # Have to change the height and width
 
-		amount_to_crop_x = (og_w - og_h)/3
-
+		left_crop = image_shape[0]/2-1 - image_shape[1]/2 - FLAGS.buffer
 		for corner in ['xmin', 'xmax', 'ymin', 'ymax']:    
 			for xml_corner in annotation_xml.iter(corner):
 				if corner == 'xmin' or corner == 'xmax':
-					value = (float(xml_corner.text) - amount_to_crop_x)/(og_w - 2*amount_to_crop_x)
+					value = min((float(xml_corner.text) - left_crop)/(og_w - 2*left_crop), IMG_SIZE)
+					if value < 0:
+						value = 0
 				else:
 					value = float(xml_corner.text) / og_h
 				xml_corner.text = str(round(IMG_SIZE * value))
