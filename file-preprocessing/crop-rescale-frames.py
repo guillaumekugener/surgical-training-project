@@ -19,46 +19,49 @@ import re
 import os
 import datetime
 import time
+import tqdm
 
 import matplotlib
 import matplotlib.pyplot as plt
 
 import cv2
 
-SOURCE_DIR = sys.argv[1]
-OUTPUT_DIR = sys.argv[2]
-TRIAL_ID = sys.argv[3] # In case we want to combine all of the images into one directory
-IMG_SIZE = 200
+from absl import app, flags, logging
+from absl.flags import FLAGS
+
+flags.DEFINE_string('source', '', 'path to directory with frames')
+flags.DEFINE_string('output', '','path to output directory')
+flags.DEFINE_string('trial', 'XXX', 'trial id')
+flags.DEFINE_integer('buffer', 30, 'adds a buffer to the cropping')
+
+FLAGS(sys.argv)
+
+SOURCE_DIR = FLAGS.source
+OUTPUT_DIR = FLAGS.output
+TRIAL_ID = FLAGS.trial # In case we want to combine all of the images into one directory
 
 DATA_DIR = os.path.join(SOURCE_DIR, TRIAL_ID)
 
 all_frames = [i for i in os.listdir(DATA_DIR) if i != '.DS_Store']
 all_frames.sort()
 
-
-start_time = time.time()
 if not os.path.isdir(OUTPUT_DIR):
 	os.mkdir(OUTPUT_DIR)
 
 # Iterate through all of the images and process them
-frame_counter = 0
-for frame in all_frames:
-	if frame_counter % 1000 == 0:
-		print('Processed: ' + str(frame_counter) + '/' + str(len(all_frames)) + ' (' + str(ceil(time.time()-start_time)) + ')')
-	frame_counter += 1
-
+for frame in tqdm.tqdm(all_frames):
 	image = cv2.cvtColor(cv2.imread(os.path.join(DATA_DIR, frame)), cv2.COLOR_RGB2BGR)
 
 	# Get the image shape and determine how much to crop by
 	image_shape = image.shape
-	amount_to_crop_x = (image_shape[1]-image_shape[0])/3 # This appears to be good from testing for 1280 x 720 images
+	square_dim = min([image.shape[0], image.shape[1]])
 
-	cropped_image = image[:, floor(amount_to_crop_x):ceil(image_shape[1] - amount_to_crop_x), :]
-	resized_image = cv2.resize(cropped_image, (IMG_SIZE, IMG_SIZE))
+	# Crop the edges and then square
+	left_crop = image_shape[1]/2-1 - image_shape[0]/2 - FLAGS.buffer
+	right_crop = image_shape[1]/2-1 + image_shape[0]/2 + FLAGS.buffer
+	new_image = image[:, floor(left_crop):ceil(right_crop), :]
+	new_image = cv2.resize(new_image, (square_dim, square_dim))
+	matplotlib.image.imsave(os.path.join(OUTPUT_DIR, TRIAL_ID + '_' + frame), new_image)
 
-	# Save the final image
-	matplotlib.image.imsave(os.path.join(OUTPUT_DIR, TRIAL_ID + '_' + frame), resized_image)
-
-
-print(f"Cropping and scaling complete. Original dimensions were {str(image.shape)}. New dimensions are {str(resized_image.shape)}. Crop was from {str((floor(amount_to_crop_x), ceil(image_shape[1] - amount_to_crop_x)))}")
+print(f"Cropping and scaling complete. Original dimensions were {str(image.shape)}. New dimensions are {str(new_image.shape)}.")
 
