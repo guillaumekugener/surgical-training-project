@@ -1,0 +1,197 @@
+---
+title: "mAP Evaluation Surgical Dataset"
+author: "Guillaume Kugener"
+date: "6/16/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(magrittr)
+```
+
+# Surgical Auto-Annotation Evaluation
+
+This document serves to generate a report to determine metrics after our auto-annotator model has been run. It generates precision vs. recall curves as well as calculating some other metrics that will be used to assess peformance.
+
+```{r}
+# Load the data with the latest metrics
+precision_recall_data <- read_csv('~/Documents/USC/USC_docs/ml/surgical-training-project/data/yolov3_complete_metrics.csv')
+ground_truth_totals <- read_csv('~/Documents/USC/USC_docs/ml/surgical-training-project/data/ground_truth_totals.csv')
+
+precision_recall_data %<>% filter(score > 0.1) # Choosing this score is obviously the challenge...
+
+training_videos = c('S306T1', 'S306T2', 'S609T2')
+validation_videos = c('S611T1')
+```
+
+```{r}
+# A bunch of helper functions
+prep_for_precision_recall_curve <- function(df, total_positives) {
+  precision_recall <- df %>%
+    arrange(-score) %>%
+    mutate(
+      ACC_TP = cumsum(TP),
+      ACC_FP = cumsum(FP)
+    ) %>%
+    mutate(
+      precision = ACC_TP / (ACC_TP + ACC_FP),
+      recall = ACC_TP / total_positives
+    )
+  
+  return(precision_recall)
+}
+
+calculate_ap <- function(df) {
+  df %<>% dplyr::select(recall, precision)
+  blank_ap <- data.frame(
+    recall=seq(0,1, 0.1),
+    precision=rep(0, 11)
+  )
+  
+  df %<>% rbind(blank_ap %>% filter(recall > max(df$recall)))
+  eleven_points = c()
+  current_threshold = 0
+  for (i in seq(1, nrow(df))) {
+    recall = df$recall[i]
+    if (recall >= current_threshold) {
+      eleven_points <- c(eleven_points, df$precision[i])
+      current_threshold <- current_threshold + 0.1
+    }
+  }
+  
+  return(eleven_points)
+}
+
+compute_multiple_ious <- function(df, total_positives, mean_iou_threshold=seq(0.5, 0.95, 0.05)) {
+  # For training
+  all_ious <- NULL
+  maps_all <- NULL
+  for (iou_threshold in mean_iou_threshold) {
+    prepped_prc <- prep_for_precision_recall_curve(
+      df = df %>%
+        # Not sure if you filter out or change the previous ones to FP...
+        mutate(TP=ifelse(IOU > iou_threshold, TP, 0)) %>%
+        mutate(FP=ifelse(IOU > iou_threshold, 0, 1)),
+        # filter((IOU > iou_threshold & TP == 1) | FP == 1),
+      total_positives = total_positives
+    )
+    
+    all_ious %<>% rbind(prepped_prc %>% dplyr::select(recall, precision) %>% mutate(iou=iou_threshold))
+    maps_all %<>% rbind(data.frame(iou=iou_threshold, map=mean(calculate_ap(prepped_prc)), stringsAsFactors = F))
+  }
+  
+  return(list(df=all_ious, maps=maps_all))
+}
+```
+
+## Training evaluations
+
+We will look at the overall metrics for the training data and then split by video and tools.
+
+```{r}
+training_pc_map <- compute_multiple_ious(
+  df = precision_recall_data %>%
+    filter(video_id %in% training_videos),
+  total_positives = ground_truth_totals %>% filter(video_id %in% training_videos) %$% sum(total)
+)
+```
+
+The plot below is a precision recall curve for various IoU thresholds for the training dataset
+
+```{r}
+ggplot(training_pc_map$df, aes(recall, precision, color=factor(iou))) +
+  geom_line() +
+  ggtitle('Training precision-recall') +
+  scale_x_continuous(limits = c(0, 1)) +
+  scale_y_continuous(limits = c(0, 1))
+```
+
+```{r training}
+combined_data_for_all_training_all_tools <- NULL
+training_combined_map <- NULL
+for (vid in training_videos) {
+  for (to in c('suction', 'grasper')) {
+    training_tool <- compute_multiple_ious(
+      df = precision_recall_data %>%
+        filter(class==to) %>%
+        filter(video_id==vid),
+      total_positives = ground_truth_totals %>% filter(video_id==vid, tool==to) %$% sum(total)
+    )
+    
+    combined_data_for_all_training_all_tools %<>% rbind(training_tool$df %>% 
+        mutate(video_id=vid, tool=to))
+    training_combined_map %<>% rbind(training_tool$maps %>% 
+        mutate(video_id=vid, tool=to))
+  }
+}
+```
+
+```{r}
+training_iou <- 0.5
+
+ggplot(combined_data_for_all_training_all_tools %>%
+    filter(iou==training_iou), 
+  aes(recall, precision, color=factor(iou))) +
+  geom_line() +
+  # Print the AP for that object
+  geom_text(data=training_combined_map %>%
+      filter(iou==training_iou) %>%
+      mutate(x=0, y=0.25),
+    aes(x, y, label=paste0('AP=', round(map, 3))), hjust=0, vjust=0) +
+  # Print the number of gt examples
+  geom_text(data=ground_truth_totals %>%
+      filter(video_id %in% training_videos) %>%
+      mutate(x=0, y=0, iou=NA), 
+    aes(x, y, label=paste0('n=', total)), hjust=0, vjust=0) +
+  ggtitle(paste0('Training precision-recall')) +
+  scale_x_continuous(limits = c(0, 1)) +
+  scale_y_continuous(limits = c(0, 1)) +
+  facet_wrap(video_id~tool, ncol=2)
+```
+
+## Validation set
+
+```{r validation}
+validation_combined_tools <- NULL
+validation_combined_map <- NULL
+for (vid in validation_videos) {
+  for (to in c('suction', 'grasper')) {
+    training_tool <- compute_multiple_ious(
+      df = precision_recall_data %>%
+        filter(class==to) %>%
+        filter(video_id==vid),
+      total_positives = ground_truth_totals %>% filter(video_id==vid, tool==to) %$% sum(total)
+    )
+    
+    validation_combined_tools %<>% rbind(training_tool$df %>% 
+        mutate(video_id=vid, tool=to))
+    validation_combined_map %<>% rbind(training_tool$maps %>% 
+        mutate(video_id=vid, tool=to))
+  }
+}
+```
+
+```{r}
+validation_iou <- 0.5
+
+ggplot(validation_combined_tools %>%
+    filter(iou==validation_iou), 
+  aes(recall, precision, color=factor(iou))) +
+  geom_line() +
+  # Print the AP for that object
+  geom_text(data=validation_combined_map %>%
+      filter(iou==validation_iou) %>%
+      mutate(x=0, y=0.25),
+    aes(x, y, label=paste0('AP=', round(map, 3))), hjust=0, vjust=0) +
+  # Print the number of gt examples
+  geom_text(data=ground_truth_totals %>%
+      filter(video_id %in% validation_videos) %>%
+      mutate(x=0, y=0, iou=NA), 
+    aes(x, y, label=paste0('n=', total)), hjust=0, vjust=0) +
+  ggtitle(paste0('Validation precision-recall')) +
+  scale_x_continuous(limits = c(0, 1)) +
+  scale_y_continuous(limits = c(0, 1)) +
+  facet_wrap(video_id~tool, ncol=2)
+```
