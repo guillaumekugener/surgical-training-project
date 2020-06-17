@@ -12,6 +12,23 @@ library(xtable)
 ```
 
 ```{r}
+survey_qs_all <- c('Anatomy is realistic', 
+  'Tissue feel is realistic', 
+  'Depth perception is realistic',
+  'Instrument application is realistic', 
+  'Image projection and graphics are realistic',
+  "This model is useful for teaching anatomy",
+  "This model is useful for teaching surgical planning",
+  "This model is useful for teaching operative technique",
+  "This model is useful for improving hand-eye coordination",
+  "This model is useful as an overall training tool",
+  "This model is useful for teaching carotid artery injury repair",
+  "Skills learned are transferrable to the operating room",
+  "This model should be incorporated into a training curriculum",
+  "I would recommend this model to trainees")
+```
+
+```{r}
 compare_sites_data <- raw_data %>% 
   mutate(dd=format(as.Date(`Start Date`), format='%Y-%m')) %>%
   mutate(SiteGroup=ifelse(is.na(dd), Source, paste0(Source, '_', dd))) %>%
@@ -22,6 +39,23 @@ compare_sites_data <- raw_data %>%
     TRUE ~ 'None'
   )) %>% 
   mutate(SiteGroup2=gsub('USCUSC1', 'USC120+', SiteGroup2))
+```
+
+```{r}
+# Get the p values for comparisons (aov across sites)
+make_aov_results <- function(d, pred, var) {
+  d <- compare_sites_data
+  pred <- prd
+  var = 'SiteGroup2'
+  aov_res <- aov(as.formula(paste0('`', pred, '` ~ `', var, '`')), data = d)
+  p_val_aov <- aov_res %>% summary() %>% .[[1]][,c('Pr(>F)')]
+  return(data.frame(q=pred, p=p_val_aov, stringsAsFactors = F))
+}
+
+pvals_out_all_aov <- NULL
+for (prd in survey_qs_all) {
+  pvals_out_all_aov %<>% rbind(make_aov_results(compare_sites_data, prd, 'SiteGroup2'))
+}
 ```
 
 ```{r}

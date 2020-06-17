@@ -32,8 +32,33 @@ pred_logisit_data <- raw_data %>%
   ) %>% mutate(Group=factor(Group)) %>%
   mutate(Attyears=ifelse(Group=='Trainee', 0, Attyears))
 
-t1s_pred <- glm(`Trial 1 Success` ~ Group + generalconfidencepre + generalconfidencepost + carotidconfidencepre + carotidconfidencepost, data=pred_logisit_data, family = 'binomial')
-t2s_pred <- glm(`Trial 2 Success` ~ Group + generalconfidencepre + generalconfidencepost + carotidconfidencepre + carotidconfidencepost, data=pred_logisit_data, family = 'binomial')
+t1s_pred <- glm(`Trial 1 Success` ~ Group + carotidconfidencepre + carotidconfidencepost, data=pred_logisit_data, family = 'binomial')
+t2s_pred <- glm(`Trial 2 Success` ~ Group + carotidconfidencepre + carotidconfidencepost, data=pred_logisit_data, family = 'binomial')
+
+glm(`Trial 1 Success` ~ carotidconfidencepre, data=pred_logisit_data, family = 'binomial') %>% summary()
+glm(`Trial 2 Success` ~ carotidconfidencepost, data=pred_logisit_data, family = 'binomial') %>% summary()
+
+summary(t1s_pred) # Could make Odds Ratios
+```
+
+```{r}
+glm(`Trial 2 Success` ~ priorsim, data=pred_logisit_data, family = 'binomial') %>% summary()
+glm(`Trial 2 Success` ~ endolast12mo, data=pred_logisit_data, family = 'binomial') %>% summary()
+glm(`Trial 2 Success` ~ Group, data=pred_logisit_data, family = 'binomial') %>% summary()
+
+
+colnames(pred_logisit_data)
+
+pred_logisit_data %>%
+  dplyr::select(Group, `Trial 1 Success`) %>%
+  group_by(Group, `Trial 1 Success`) %>%
+  dplyr::summarise(count=n()) %>%
+  reshape2::dcast(Group ~ `Trial 1 Success`, value.var = 'count') %>%
+  column_to_rownames(var='Group') %>%
+  fisher.test()
+```
+
+```{r}
 
 # Train logistic regression
 results_logit_data <- data.frame(

@@ -13,6 +13,7 @@ library(DT)
 ## DATASET FILES ##
 source_dir <- '~/Documents/USC/USC_docs/ml/surgical-training-project/data/carotid_outcomes/'
 plot_dir <- file.path(source_dir, 'plots')
+final_figure_dir <- file.path(source_dir, 'figures')
 file_to_use <- file.path(source_dir, 'data', 'UPDATED_Raw Data.xlsx - Sheet1.tsv')
 emory_data <- file.path(source_dir, 'data', 'Emory ETN-fixed.txt')
 

@@ -11,6 +11,50 @@ source('~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/carotid_m
 ```
 
 ```{r}
+a1_t2 <- raw_data %>%
+  dplyr::select(SurveyID, Group, `trial 1 ebl`, `trial 2 ebl`) %>%
+  gather(trial, value, -SurveyID, -Group) %>%
+  filter((trial == 'trial 1 ebl' & Group == 'Attending') | (trial == 'trial 2 ebl' & Group == 'Trainee'))
+
+t.test(
+  a1_t2 %>% filter(Group == 'Attending') %$% value,
+  a1_t2 %>% filter(Group == 'Trainee') %$% value
+)
+
+raw_data %>%
+  dplyr::select(SurveyID, Group, `Trial 1 Success`, `Trial 2 Success`) %>%
+  gather(trial, value, -SurveyID, -Group) %>%
+  filter((trial == 'Trial 1 Success' & Group == 'Attending') | (trial == 'Trial 2 Success' & Group == 'Trainee')) %>%
+  group_by(Group, value) %>%
+  dplyr::summarise(count=n()) %>%
+  reshape2::dcast(Group ~ value, value.var='count') %>%
+  column_to_rownames(var='Group') %>%
+  fisher.test()
+```
+
+```{r}
+neuro <- raw_data %>% filter(Specialty == 'Neurosurgery', Group=='Attending')
+oto <- raw_data %>% filter(grepl('^Ot', Specialty), Group=='Attending')
+
+t.test(neuro$`Trial 1 TTH`, oto$`Trial 1 TTH`)
+
+complete_data %>%
+  filter(!is.na(`Trial 3 Success`)) %$%
+  t.test(`Trial 1 TTH`, `Trial 3 TTH`, paired=T)
+
+complete_data %>%
+  dplyr::select(`Trial 1 Success`, `Trial 2 Success`, `Trial 3 Success`) %>%
+  filter(!is.na(`Trial 3 Success`)) %>%
+  gather(var, value) %>%
+  group_by(var, value) %>%
+  dplyr::summarise(count=n()) %>%
+  reshape2::dcast(var ~ value, value.var='count') %>%
+  filter(var != 'Trial 2 Success') %>%
+  column_to_rownames(var='var') %>%
+  fisher.test()
+```
+
+```{r}
 # Build a table from the raw data
 
 t1_columns <- c('', 'Overall', 'Attendings', 'Trainees', 'Training Targets')

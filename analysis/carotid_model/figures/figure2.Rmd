@@ -10,6 +10,12 @@ knitr::opts_chunk$set(echo = TRUE)
 library(pROC)
 library(plotROC)
 source('~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/carotid_model/preprocess_data.R')
+jama_colors <- pal_jama("default")(7)
+gg_color_hue <- function(n) {
+  hues = seq(15, 375, length = n + 1)
+  hcl(h = hues, l = 65, c = 100)[1:n]
+}
+defaultcols = gg_color_hue(2)
 ```
 
 ```{r}
@@ -63,7 +69,7 @@ pre_conf_trial_1 <- ggplot(plotting_data_ebl_conf %>% filter(trial =='Trial 1'),
   geom_point(position = position_jitter(width=0.2), size=2, alpha=0.5) +
   stat_summary(fun.y = median, fun.ymin = median, fun.ymax = median, geom = "crossbar", width = 0.25, color='black') +
   guides(color=guide_legend(title=NULL)) +
-  guides(fill=guide_legend(title=NULL, override.aes = list(alpha=1))) +
+  scale_color_manual(values=c('Success'=defaultcols[2], 'Failure'=defaultcols[1])) +
   xlab('Pre-trial Carotid Confidence') + ylab('Trial 1 Estimated Blood Loss (mL)') +
   theme_bw() +
   theme(
@@ -79,7 +85,7 @@ post_confidence_trial_2 <- ggplot(plotting_data_ebl_conf %>% filter(trial =='Tri
   geom_point(position = position_jitter(width=0.2), size=2, alpha=0.5) +
   stat_summary(fun.y = median, fun.ymin = median, fun.ymax = median, geom = "crossbar", width = 0.25, color='black') +
   guides(color=guide_legend(title=NULL)) +
-  guides(fill=guide_legend(title=NULL, override.aes = list(alpha=1))) +
+  scale_color_manual(values=c('Success'=defaultcols[2], 'Failure'=defaultcols[1])) +
   xlab('Post-trial Carotid Confidence') + ylab('Trial 2 Estimated Blood Loss (mL)') +
   theme_bw() +
   theme(
@@ -201,7 +207,6 @@ heart_rate_data_bar <- complete_heart_rate_data %>%
 
 ```{r}
 heart_comparisons <- list( c("Baseline", "Trial 1"), c("Baseline", "Intertrial"), c("Intertrial", "Trial 2"), c("Trial 1", "Trial 2"))
-jama_colors <- pal_jama("default")(7)
 
 average_heart_rate_plot <- ggplot(complete_heart_rate_data %>% filter(value_type=='Average'), aes(timing, value, color=timing, fill=timing)) +
   # geom_boxplot(outlier.shape = NA) +
