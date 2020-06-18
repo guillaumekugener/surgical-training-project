@@ -17,14 +17,14 @@ library(ggsci)
 
 ```{r include=FALSE}
 plot_dir <- '~/Documents/USC/USC_docs/ml/surgical-training-project/data/grant_application/'
-tool_time_stamp_data <- read_tsv('~/Downloads/tool_time_stamps - Sheet1.tsv')
+tool_time_stamp_data <- read_tsv('~/Downloads/20200408_tool_time_stamps - Sheet1 .tsv')
 
 tool_order_plot <- c('no tool in view', 'drill', 'suction', 'grasper', 'cottonoid', 'muscle')
 ```
 
 
 ```{r}
-file_to_use <- '~/Documents/USC/USC_docs/ml/surgical-training-project/data/UPDATED_Raw Data.xlsx - Sheet1.tsv'
+file_to_use <- '~/Documents/USC/USC_docs/ml/surgical-training-project/data/carotid_outcomes/data/UPDATED_Raw Data.xlsx - Sheet1.tsv'
 
 outcomes_raw_data <- read_tsv(file_to_use) %>% 
   filter(!is.na(SurveyID)) %>%
@@ -93,12 +93,15 @@ pvalues_data <- plotting_data_tools_proportions %>%
   dcast(SurveyID + Tool ~ Trial, value.var='proportion') %>%
   group_by(Tool) %>%
   filter(Tool != 'drill') %>%
+  filter(!is.na(T1), !is.na(T2)) %>%
   dplyr::summarise(p.value=t.test(x=`T1`, y=`T2`)$p.value) %>%
   mutate(text=ifelse(p.value < 0.05, '*', ''))
 ```
 
 ```{r}
-plotting_data_tools_proportions %<>% mutate(Tool=factor(Tool, levels=tool_order_plot))
+plotting_data_tools_proportions %<>% 
+  filter(Tool %in% tool_order_plot) %>%
+  mutate(Tool=factor(Tool, levels=tool_order_plot))
 
 tool_proportion_use <- ggplot(plotting_data_tools_proportions, aes(Tool, proportion, color=Trial)) +
   geom_point(position = position_jitterdodge(jitter.width = 0.2)) +
@@ -136,11 +139,9 @@ tool_overtime_by_trial_data %<>%
   mutate(Tool=factor(Tool, tool_order_plot))
 
 tool_overtime_plot <- ggplot(tool_overtime_by_trial_data %>%
-                               ungroup() %>%
-                               mutate(
-                                 SurveyID=paste0('ID: ', SurveyID),
-                                 Trial=paste0('Trial ', Trial)
-                                )) +
+    ungroup() %>%
+    mutate(SurveyID=paste0('ID: ', SurveyID),
+      Trial=paste0('Trial ', Trial))) +
   geom_rect(aes(xmin=start_fraction, xmax=end_fraction, ymin=as.integer(Tool)-0.5, ymax=as.integer(Tool)+0.5, fill=Tool)) +
   xlab('Time stamp (as fraction of total trial time)') +
   scale_y_continuous(breaks=c(1:length(tool_order_plot)), labels=tool_order_plot) +
@@ -233,87 +234,6 @@ proportions_vs_outcomes_data %>%
   reshape2::dcast(SurveyID + Tool + var ~ Trial, value.var='value')
 ```
 
-```{r}
-tool_presence_frames <- read_csv('~/Documents/USC/USC_docs/ml/surgical-training-project/data/grant_application/interface-mockup/S306T2.csv')
-
-red_out_probs <- read_tsv('~/Documents/USC/USC_docs/ml/surgical-training-project/data/dev/frames/metric-redout-S306T2.tsv') %>%
-  mutate(index=rank(frame)) %>%
-  mutate(loss=ifelse(red_out_prob > 0.5, 1, 0)) %>%
-  mutate(prop=cumsum(red_out_prob))
-
-
-prob_hemostatis <- tool_presence_frames %>%
-  mutate(index=rank(frame)) %>%
-  mutate(prob = (cumsum(cottonoid)/2 + cumsum(grasper) + cumsum(muscle) + cumsum(suction)/2)/(index*3))
-
-prob_hemostatis_plot <- ggplot(prob_hemostatis %>% filter(index <= 2536), aes(index, prob)) +
-  geom_area(fill='black', alpha=0.5) +
-  geom_line(color='black') +
-  xlab('Frame') +
-  ylab('Probability achieve hemostasis in next 20 sec') +
-  scale_y_continuous(limits=c(0, 1)) +
-  theme_bw() +
-  theme(
-    legend.position = 'none',
-    axis.text = element_text(size=16),
-    axis.title = element_text(size=16),
-    strip.text = element_text(size=16)
-  )
-
-ggsave(prob_hemostatis_plot, filename = '~/Documents/USC/USC_docs/ml/surgical-training-project/data/grant_application/interface-mockup/thh_prob.png', width = 5, height = 5, device='png')
-```
-
-```{r}
-estimated_blood_loss_plot <- ggplot(red_out_probs %>% filter(index <= 2536), aes(index, prop)) +
-  geom_area(fill='red', alpha=0.5) +
-  geom_line(color='red') +
-  xlab('Frame') +
-  ylab('Estimated blood loss (mL)') +
-  geom_hline(yintercept = 100, linetype=2) +
-  annotate('text', x = 0, y = 102, size = 6, label='Goal', hjust=0, vjust=0) +
-  scale_y_continuous(limits=c(0, 120)) +
-  theme_bw() +
-  theme(
-    legend.position = 'none',
-    axis.text = element_text(size=16),
-    axis.title = element_text(size=16),
-    strip.text = element_text(size=16)
-  )
-
-ggsave(estimated_blood_loss_plot, filename = '~/Documents/USC/USC_docs/ml/surgical-training-project/data/grant_application/interface-mockup/ebl.png', width = 5, height = 5, device='png')
-
-tool_presence_pre <- tool_presence_frames %>%
-  gather(tool, present, -frame) %>%
-  group_by(tool) %>%
-  mutate(index=rank(frame)) %>%
-  mutate(prop=cumsum(present)/index) %>%
-  left_join(., 
-    red_out_probs %>% 
-      mutate(frame=gsub('\\.jpeg', '', gsub('.*/', '', frame))) %>% 
-      dplyr::select(frame, red_out_prob), 
-    by=c('frame')) %>%
-  ungroup() %>% 
-  mutate(tool=factor(tool, levels=c('drill', 'suction', 'cottonoid', 'string', 'grasper', 'muscle')))
-
-stats_on_current_surgery <- ggplot(tool_presence_pre %>% filter(index <= 2536), aes(index, prop, fill=tool, color=tool)) +
-  geom_area(alpha=0.5) +
-  geom_line() +
-  facet_wrap(~tool, nrow=1) +
-  scale_y_continuous(limits = c(0, 1)) +
-  scale_fill_jama() +
-  scale_color_jama() +
-  xlab('Frame') +
-  ylab('Proportion of time tool has been present') +
-  theme_bw() +
-  theme(
-    legend.position = 'none',
-    axis.text = element_text(size=16),
-    axis.title = element_text(size=16),
-    strip.text = element_text(size=16)
-  )
-
-ggsave(stats_on_current_surgery, filename = '~/Documents/USC/USC_docs/ml/surgical-training-project/data/grant_application/interface-mockup/tool_stats.png', width = 30, height = 5, device='png')
-```
 
 
 
