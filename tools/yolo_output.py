@@ -97,7 +97,7 @@ class YoloOutput:
     # For each tool in each frame, creates a concatenated vector
     # This should have the inputs and outputs ordered
     # TODO: turn this into a data generator
-    def generate_tool_heatmap_vector(self, output_size=5):
+    def generate_tool_heatmap_vector(self, output_size=5, include_score_in_label=False):
         input_matrix = []
         labels_matrix = []
         for fi, f in tqdm.tqdm(enumerate(self.data)):
@@ -119,11 +119,17 @@ class YoloOutput:
                 frame_tool_gt = []
                 for o in frame_ground_truth['objects']:
                     if o['class'] == self.classes_map.at[k, 0]:
-                        frame_tool_gt.append(o['coords'])
+                        array_to_append = o['coords']
+                        if include_score_in_label:
+                            array_to_append.insert(0, 1) # If we want to predict scores as well
+                        frame_tool_gt.append(array_to_append)
                 
 
                 while len(frame_tool_gt) != output_size:
-                    frame_tool_gt.append([0,0,0,0])
+                    array_to_append = [0,0,0,0]
+                    if include_score_in_label:
+                        array_to_append.insert(0, 1)
+                    frame_tool_gt.append(array_to_append)
                 tools_annotations.append(np.array(frame_tool_gt).flatten())
 
             input_matrix.append(tools_heatmap)
@@ -135,7 +141,7 @@ class YoloOutput:
         })
 
     # Turns our dataset into a dataset of sequences prepped for an RNN model
-    def turn_inputs_labels_into_sequences(self, data, seq_len=6, shuffle=True):
+    def turn_inputs_labels_into_sequences(self, data, seq_len=6):
         sequential_data = []
 
         previous_inputs = deque(maxlen=seq_len)
@@ -179,7 +185,7 @@ class YoloOutput:
 
 # This is outside of the class because it can be run on a bunch of combined_datasets
 # And will handle the shuffling of them as well
-def prepared_for_training(self, sequential_data, shuffle=True):
+def prepare_for_training(sequential_data, shuffle=True):
     # Optional, in case we want to maitain the order (i.e prediction)
     # We will want to deal with cases where the 
     if shuffle:
