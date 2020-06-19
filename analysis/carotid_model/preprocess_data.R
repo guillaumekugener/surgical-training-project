@@ -21,8 +21,8 @@ emory_data <- file.path(source_dir, 'data', 'Emory ETN-fixed.txt')
 raw_data <- read_tsv(file_to_use) %>%
   mutate(SurveyID=ifelse(is.na(SurveyID), paste0('USC', row.names(.)), SurveyID)) %>%
   mutate(Group=case_when(
-    (!is.na(Attyears) & Attyears) >= 1 ~ 'Attending',
-    (!is.na(Resyears) & Resyears) >= 1 ~ 'Trainee',
+    (!is.na(Attyears) & (Attyears >= 1)) ~ 'Attending',
+    (!is.na(Resyears) & (Resyears >= 1)) ~ 'Trainee',
     grepl('USC', SurveyID) ~ 'Trainee',
     TRUE ~ 'None'
   )) %>%
