@@ -7,7 +7,6 @@ import copy
 import re
 
 import matplotlib.pyplot as plt
-import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from PIL import Image
 
@@ -293,6 +292,7 @@ class SurgicalVideoFrame:
         # create a new XML file with the results
         myfile = open(os.path.join(destination, re.sub('\\.jpeg', '.xml', frame_file_name)), "wb")
         myfile.write(etree.tostring(annotation, pretty_print=True))
+
 
         
 '''
