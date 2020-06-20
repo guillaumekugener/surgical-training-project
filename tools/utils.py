@@ -293,6 +293,48 @@ def combine_predictions_and_ground_truth(all_frames, classes_map, detected_objec
         all_frames_objects.append(data_to_append)
     return(all_frames_objects)
 
+def make_frame_object_from_file(file_path, IMG_SIZE=720):
+    annotation_xml = etree.parse(file_path)
+
+    data_to_append = { 'frame_id': file_path, 'objects': [] }
+    for obj in annotation_xml.findall('object'):
+        true_class = obj.find('name').text
+        
+        true_coordinates = []
+        for corner in ['xmin', 'xmax', 'ymin', 'ymax']:
+            true_coordinates.append(float(obj.find('bndbox').find(corner).text)/IMG_SIZE)
+        data_to_append['objects'].append({ 
+            'class': true_class, 
+            'coords': true_coordinates
+        })
+
+    return data_to_append
+
+def plot_frame_with_bb(image_path, annotation_path):
+    frame_object = make_frame_object_from_file(annotation_path)
+    img_array = cv2.cvtColor(cv2.imread(image_path), cv2.COLOR_RGB2BGR)
+    fig,ax = plt.subplots(1)
+    ax.imshow(img_array)
+
+    frame_object = make_frame_object_from_file(annotation_path, IMG_SIZE=img_array.shape[0])
+
+    print(f"Image size: {img_array.shape}")
+
+    # Draw the ground truth boxes
+    for ro in frame_object['objects']:
+        coords = [i * img_array.shape[0] for i in ro['coords']]
+        rect = Rectangle(
+            (coords[0], coords[2]), 
+            coords[1] - coords[0], 
+            coords[3] - coords[2], 
+            linewidth=1,edgecolor='b',facecolor='none')
+
+        print(f"{ro['class']} coordinates: {coords}")
+        ax.add_patch(rect) 
+
+    plt.show()
+
+
 # Given a frame object, make a plot of the image
 def plot_single_frame_with_outlines(frame_object, images_dir, score_thresh=0.5):
     image_path = os.path.join(images_dir, re.sub('\\.xml', '.jpeg', frame_object['frame_id']))
