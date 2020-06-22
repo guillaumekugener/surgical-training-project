@@ -366,3 +366,33 @@ def plot_single_frame_with_outlines(frame_object, images_dir, score_thresh=0.5):
 
             ax.add_patch(rect) 
     plt.show()
+
+# Parses all the ground truth labels and returns a pandas dataframe
+def gt_as_pd_df(annotation_dir, IMG_SIZE):
+    all_annotation_frames = [os.path.join(annotation_dir, a) for a in os.listdir(annotation_dir) if re.search('xml$', a)]
+    all_annotation_frames.sort()
+
+    final_data = {}
+
+    df_cols = ['video_id', 'frame_id', 'tool', 'score', 'x1', 'y1', 'x2', 'y2']
+    for c in df_cols:
+        final_data[c] = []
+
+    for a in tqdm.tqdm(all_annotation_frames):
+        fo = make_frame_object_from_file(a, IMG_SIZE)
+        
+        video_id = re.sub('_.*', '', re.sub('.*/', '', fo['frame_id']))
+        frame_id = re.sub('(.*_frame_)|(\\.xml$)', '', fo['frame_id'])
+        
+        for o in fo['objects']:
+            final_data['video_id'].append(video_id)
+            final_data['frame_id'].append(frame_id)
+            final_data['tool'].append(o['class'])
+            final_data['score'].append(1)
+            
+            for i, e in enumerate(['x1', 'y1', 'x2', 'y2']):
+                final_data[e].append(o['coords'][i])
+
+                
+    final_data_df = pd.DataFrame(final_data)
+    return final_data_df
