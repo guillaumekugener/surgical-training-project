@@ -4,6 +4,7 @@ import pickle
 import re
 import os
 from math import floor
+import time
 
 from lxml import etree
 
@@ -72,7 +73,8 @@ class PostProcessYoloGenerator(Sequence):
         return frame_data
 
     # Generates our feature heatmap for a given frame
-    def generate_heatmap(self, frame_id, objects=[]):
+    # TODO: speed this up
+    def generate_heatmap(self, frame_id, objects=[], score_threshold=0.05):
         # Create heatmaps object for each class (for each frame)
         heatmap = np.zeros((self.grid_size, self.grid_size))
 
@@ -83,10 +85,13 @@ class PostProcessYoloGenerator(Sequence):
         if frame is None:
             return heatmap 
 
-        score_sum = 0
+        score_sum = np.sum(frame[1][0])
+        f_use = np.floor(frame[0][0]*self.grid_size).astype(int)
+
         for oi in range(frame[3][0]):
-            x1, y1, x2, y2 = [floor(i * self.grid_size) for i in frame[0][0][oi]]
+            x1, y1, x2, y2 = f_use[oi,:]
             score = frame[1][0][oi]
+
             pred_class = frame[2][0][oi]
 
             # Skip if this object is not included in our 
@@ -94,11 +99,7 @@ class PostProcessYoloGenerator(Sequence):
                 continue
 
             # x1, y1, x2, y2
-            for y in range(y1, min(y2+1, self.grid_size)):
-                for x in range(x1, min(x2+1, self.grid_size)):
-                    # Need to normalize somehow ()
-                    heatmap[y][x] += score
-            score_sum += score
+            heatmap[y1:min(y2+1, self.grid_size),x1:min(x2+1, self.grid_size)] += score
 
         # So we don't get a divide by 0 error
         if score_sum == 0:
@@ -192,5 +193,30 @@ class PostProcessYoloGenerator(Sequence):
 
         return(X, y)
 
+    def save_process_frames_as_npy_array(self, output_dir):
+        for frame_id in self.frame_ids[:64]:
+            X, _ = self.data_generation([frame_id])
 
+            # Save this frame as numpy array
+            np.save(os.path.join(output_dir, frame_id), X[0,])
+
+    def data_generation_from_file(self, frame_ids, source_dir):
+        X = np.empty((self.batch_size, *self.dim))
+        y = np.empty((self.batch_size, self.out_dim * 5))
+
+        for i, frame_id in enumerate(frame_ids):
+            # Now make the label
+            tool_id = re.sub('.*tool_', '', frame_id)
+
+            annotation_for_frame = self.get_frame_annotations(frame_id, [tool_id])
+            labels_all = []
+            for o in annotation_for_frame['objects']:
+                labels_all.append([1] + o['coords'])
+
+            while len(labels_all) < self.out_dim:
+                labels_all.append([0,0,0,0,0])
+
+            X[i,] = np.load(os.path.join(source_dir, frame_id + '.npy'))
+            y[i,] = np.array(labels_all).flatten() # Should be 5 x number of objects per tool
         
+        return X, y
