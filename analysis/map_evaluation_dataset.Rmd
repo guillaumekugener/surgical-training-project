@@ -9,19 +9,42 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(magrittr)
+library(data.table)
 ```
 
 # Surgical Auto-Annotation Evaluation
 
+```{r}
+auto_plot_dir <- '~/Documents/USC/USC_docs/ml/surgical-training-project/data/auto-label/plots'
+```
+
 This document serves to generate a report to determine metrics after our auto-annotator model has been run. It generates precision vs. recall curves as well as calculating some other metrics that will be used to assess peformance.
 
-```{r}
+```{r eval=FALSE}
 # Load the data with the latest metrics
 precision_recall_data <- read_csv('~/Documents/USC/USC_docs/ml/surgical-training-project/data/yolov3_complete_metrics.csv')
-ground_truth_totals <- read_csv('~/Documents/USC/USC_docs/ml/surgical-training-project/data/ground_truth_totals.csv')
+ground_truth_totals <- read_csv('~/Documents/USC/USC_docs/ml/datasets/cvat_output/gt_labels.csv')
 
 precision_recall_data %<>% filter(score > 0.1) # Choosing this score is obviously the challenge...
+```
 
+```{r eval=TRUE}
+all_results <- read_csv('~/Documents/USC/USC_docs/ml/datasets/large-clean-surgical-ds/detection/combined_call_boxes.csv') %>%
+  filter(source != 'gt')
+```
+
+```{r}
+yolo_results_labelled <- read_csv('~/Documents/USC/USC_docs/ml/datasets/large-clean-surgical-ds/detection/yolo_tp_fp.csv')
+lstm_results_labelled <- read_csv('~/Documents/USC/USC_docs/ml/datasets/large-clean-surgical-ds/detection/lstm_tp_fp.csv')
+ground_truth_totals <- read_csv('~/Documents/USC/USC_docs/ml/datasets/cvat_output/gt_labels.csv') %>%
+  filter(tool != 'stop')
+```
+
+```{r}
+
+```
+
+```{r}
 training_videos = c('S306T1', 'S306T2', 'S609T2')
 validation_videos = c('S611T1')
 ```
@@ -91,64 +114,74 @@ compute_multiple_ious <- function(df, total_positives, mean_iou_threshold=seq(0.
 We will look at the overall metrics for the training data and then split by video and tools.
 
 ```{r}
-training_pc_map <- compute_multiple_ious(
-  df = precision_recall_data %>%
-    filter(video_id %in% training_videos),
-  total_positives = ground_truth_totals %>% filter(video_id %in% training_videos) %$% sum(total)
-)
+combined_training_pc_map <- NULL
+ds_list <- list('yolo'=yolo_results_labelled, 'lstm'=lstm_results_labelled)
+for (ds in names(ds_list)) {
+  combined_training_pc_map %<>% rbind(compute_multiple_ious(
+    df = ds_list[[ds]] %>%
+      filter(video_id %in% training_videos),
+    total_positives = ground_truth_totals %>% filter(video_id %in% training_videos) %>% nrow()
+  )$df %>% mutate(model=ds))
+}
 ```
 
 The plot below is a precision recall curve for various IoU thresholds for the training dataset
 
 ```{r}
-ggplot(training_pc_map$df, aes(recall, precision, color=factor(iou))) +
+ggplot(combined_training_pc_map, aes(recall, precision, color=model)) +
   geom_line() +
   ggtitle('Training precision-recall') +
   scale_x_continuous(limits = c(0, 1)) +
-  scale_y_continuous(limits = c(0, 1))
+  scale_y_continuous(limits = c(0, 1)) +
+  facet_wrap(~iou)
 ```
 
 ```{r training}
 combined_data_for_all_training_all_tools <- NULL
 training_combined_map <- NULL
-for (vid in training_videos) {
-  for (to in c('suction', 'grasper')) {
-    training_tool <- compute_multiple_ious(
-      df = precision_recall_data %>%
-        filter(class==to) %>%
-        filter(video_id==vid),
-      total_positives = ground_truth_totals %>% filter(video_id==vid, tool==to) %$% sum(total)
-    )
-    
-    combined_data_for_all_training_all_tools %<>% rbind(training_tool$df %>% 
-        mutate(video_id=vid, tool=to))
-    training_combined_map %<>% rbind(training_tool$maps %>% 
-        mutate(video_id=vid, tool=to))
+
+for (ds in names(ds_list)) {
+  for (vid in training_videos) {
+    for (to in c('suction', 'grasper', 'muscle', 'cottonoid', 'string')) {
+      training_tool <- compute_multiple_ious(
+        df = ds_list[[ds]] %>%
+          filter(tool_id==to) %>%
+          filter(video_id==vid),
+        total_positives = ground_truth_totals %>% filter(video_id==vid, tool==to) %>% nrow()
+      )
+      
+      combined_data_for_all_training_all_tools %<>% rbind(training_tool$df %>% 
+          mutate(video_id=vid, tool=to, model=ds))
+      training_combined_map %<>% rbind(training_tool$maps %>% 
+          mutate(video_id=vid, tool=to, model=ds))
+    }
   }
 }
 ```
 
-```{r}
+```{r fig.height=12}
 training_iou <- 0.5
 
 ggplot(combined_data_for_all_training_all_tools %>%
     filter(iou==training_iou), 
-  aes(recall, precision, color=factor(iou))) +
+  aes(recall, precision, color=model)) +
   geom_line() +
   # Print the AP for that object
   geom_text(data=training_combined_map %>%
       filter(iou==training_iou) %>%
-      mutate(x=0, y=0.25),
+      mutate(x=0, y=ifelse(model=='yolo', 0.25, ifelse(model=='lstm', 0.5, 0))),
     aes(x, y, label=paste0('AP=', round(map, 3))), hjust=0, vjust=0) +
   # Print the number of gt examples
   geom_text(data=ground_truth_totals %>%
       filter(video_id %in% training_videos) %>%
-      mutate(x=0, y=0, iou=NA), 
+      group_by(video_id, tool) %>%
+        dplyr::summarise(total=n()) %>%
+      mutate(x=0, y=0, iou=NA, model=NA), 
     aes(x, y, label=paste0('n=', total)), hjust=0, vjust=0) +
   ggtitle(paste0('Training precision-recall')) +
   scale_x_continuous(limits = c(0, 1)) +
   scale_y_continuous(limits = c(0, 1)) +
-  facet_wrap(video_id~tool, ncol=2)
+  facet_wrap(tool~video_id, ncol=3)
 ```
 
 ## Validation set
@@ -156,19 +189,23 @@ ggplot(combined_data_for_all_training_all_tools %>%
 ```{r validation}
 validation_combined_tools <- NULL
 validation_combined_map <- NULL
-for (vid in validation_videos) {
-  for (to in c('suction', 'grasper')) {
-    training_tool <- compute_multiple_ious(
-      df = precision_recall_data %>%
-        filter(class==to) %>%
-        filter(video_id==vid),
-      total_positives = ground_truth_totals %>% filter(video_id==vid, tool==to) %$% sum(total)
-    )
-    
-    validation_combined_tools %<>% rbind(training_tool$df %>% 
-        mutate(video_id=vid, tool=to))
-    validation_combined_map %<>% rbind(training_tool$maps %>% 
-        mutate(video_id=vid, tool=to))
+training_combined_map <- NULL
+
+for (ds in names(ds_list)) {
+  for (vid in validation_videos) {
+    for (to in c('suction', 'grasper', 'muscle', 'cottonoid', 'string')) {
+      training_tool <- compute_multiple_ious(
+        df = ds_list[[ds]] %>%
+          filter(tool_id==to) %>%
+          filter(video_id==vid),
+        total_positives = ground_truth_totals %>% filter(video_id==vid, tool==to) %>% nrow()
+      )
+      
+      validation_combined_tools %<>% rbind(training_tool$df %>% 
+          mutate(video_id=vid, tool=to, model=ds))
+      validation_combined_map %<>% rbind(training_tool$maps %>% 
+          mutate(video_id=vid, tool=to, model=ds))
+    }
   }
 }
 ```
@@ -178,20 +215,92 @@ validation_iou <- 0.5
 
 ggplot(validation_combined_tools %>%
     filter(iou==validation_iou), 
-  aes(recall, precision, color=factor(iou))) +
+  aes(recall, precision, color=model)) +
   geom_line() +
   # Print the AP for that object
   geom_text(data=validation_combined_map %>%
       filter(iou==validation_iou) %>%
-      mutate(x=0, y=0.25),
+      mutate(x=0, y=ifelse(model=='yolo', 0.25, 0.5)),
     aes(x, y, label=paste0('AP=', round(map, 3))), hjust=0, vjust=0) +
   # Print the number of gt examples
   geom_text(data=ground_truth_totals %>%
       filter(video_id %in% validation_videos) %>%
-      mutate(x=0, y=0, iou=NA), 
+      group_by(video_id, tool) %>%
+      dplyr::summarise(total=n()) %>%
+      mutate(x=0, y=0, iou=NA, model=NA), 
     aes(x, y, label=paste0('n=', total)), hjust=0, vjust=0) +
   ggtitle(paste0('Validation precision-recall')) +
   scale_x_continuous(limits = c(0, 1)) +
   scale_y_continuous(limits = c(0, 1)) +
-  facet_wrap(video_id~tool, ncol=2)
+  facet_wrap(tool~video_id, ncol=3)
 ```
+
+```{r}
+combined_all_results_example <- rbind(
+  yolo_results_labelled %>% dplyr::select(source, video_id, frame_id, tool=tool_id, score),
+  lstm_results_labelled %>% dplyr::select(source, video_id, frame_id, tool=tool_id, score),
+  ground_truth_labels %>% dplyr::select(video_id, frame_id, tool, score) %>% mutate(source='gt')
+)
+
+for (tid in unique(combined_all_results_example$tool)) {
+  example_suction_only <- combined_all_results_example %>% 
+    filter(tool==tid) %>%
+    mutate(frame_id=as.numeric(frame_id)) %>%
+    mutate(source=factor(source)) %>%
+    mutate(source_y=as.integer(source))
+  
+  labels_axis <- example_suction_only %>%
+    distinct(source, source_y) %$%
+    setNames(source_y, source)
+  
+  plot_of_models_v_gt <- ggplot(example_suction_only, aes(frame_id, source_y, fill=score)) +
+    geom_rect(aes(ymin=source_y, ymax=source_y+1, xmin=frame_id, xmax=frame_id+1)) +
+    facet_wrap(~video_id, scales = 'free_x') +
+    scale_fill_gradient(low='white', high='red') +
+    scale_y_continuous(labels = names(labels_axis), breaks = labels_axis+0.5) +
+    ggtitle(paste0(tid, ' detection across models and ground truth'))
+  
+  ggsave(plot_of_models_v_gt, filename = file.path(auto_plot_dir, paste0(tid, '_scoring_across_models.png')), width = 10, height = 5)
+}
+```
+
+```{r}
+unlabelled_results <- read_csv('~/Documents/USC/USC_docs/ml/datasets/large-clean-surgical-ds/detection/unlabelled_all_datasets.csv')
+```
+
+```{r}
+unlabelled_videos_assessed <- c('S303T1')
+
+# Unlabelled (no ground truth example)
+unlabelled_results <- unlabelled_results %>%
+  filter(video_id %in% unlabelled_videos_assessed) %>%
+  dplyr::select(video_id, frame_id, tool=tool_id, source, score) %>%
+  mutate(frame_id=as.numeric(frame_id)) %>%
+  mutate(source=factor(source)) %>%
+  mutate(source_y=as.integer(source)) %>%
+  mutate(end_frame_id=frame_id+1)
+
+# S303T1 data that was predicted
+time_stamps_individual_tool <- read_csv('~/Documents/USC/USC_docs/ml/surgical-training-project/data/grant_application/tool_time_stamps - Sheet1.csv') %>%
+  mutate(source='gt') %>%
+  mutate(source_y=0, score=1) %>%
+  dplyr::select(video_id=`Video ID`, frame_id=`Start frame`, tool=Tool, source, score, source_y, end_frame_id=`End frame`)
+
+combined_unlabelled_single_plot <- rbind(
+  unlabelled_results,
+  time_stamps_individual_tool
+)
+  
+unlabelled_y = c('gt'=0, (unlabelled_results %>% distinct(source, source_y) %$% setNames(source_y, source)))
+
+ggplot(combined_unlabelled_single_plot, aes(frame_id, source_y, fill=score)) +
+  geom_rect(aes(ymin=source_y, ymax=source_y+1, xmin=frame_id, xmax=end_frame_id)) +
+  facet_wrap(~tool, scales = 'free_x') +
+  scale_fill_gradient(low='white', high='red') +
+  scale_y_continuous(labels = names(unlabelled_y), breaks = unlabelled_y+0.5) +
+  ggtitle(paste0('S303T1', ' detection across models and ground truth'))
+```
+
+
+
+
