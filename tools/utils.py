@@ -293,15 +293,25 @@ def combine_predictions_and_ground_truth(all_frames, classes_map, detected_objec
         all_frames_objects.append(data_to_append)
     return(all_frames_objects)
 
-def make_frame_object_from_file(file_path, IMG_SIZE=720):
+def make_frame_object_from_file(file_path, IMG_SIZE=None):
     annotation_xml = etree.parse(file_path)
+
+    if IMG_SIZE is None:
+        # Set the image size
+        for node in annotation_xml.iter('size'):
+            for sn in node.iter('width'):
+                IMG_SIZE = float(sn.text)
+            for sn in node.iter('height'):
+                if float(sn.text) != IMG_SIZE:
+                    # The annotations are not square
+                    print('The annotations are not square so dimensions will be off')
 
     data_to_append = { 'frame_id': file_path, 'objects': [] }
     for obj in annotation_xml.findall('object'):
         true_class = obj.find('name').text
         
         true_coordinates = []
-        for corner in ['xmin', 'xmax', 'ymin', 'ymax']:
+        for corner in ['xmin', 'ymin', 'xmax', 'ymax']:
             true_coordinates.append(float(obj.find('bndbox').find(corner).text)/IMG_SIZE)
         data_to_append['objects'].append({ 
             'class': true_class, 
@@ -311,7 +321,6 @@ def make_frame_object_from_file(file_path, IMG_SIZE=720):
     return data_to_append
 
 def plot_frame_with_bb(image_path, annotation_path):
-    frame_object = make_frame_object_from_file(annotation_path)
     img_array = cv2.cvtColor(cv2.imread(image_path), cv2.COLOR_RGB2BGR)
     fig,ax = plt.subplots(1)
     ax.imshow(img_array)
@@ -324,9 +333,9 @@ def plot_frame_with_bb(image_path, annotation_path):
     for ro in frame_object['objects']:
         coords = [i * img_array.shape[0] for i in ro['coords']]
         rect = Rectangle(
-            (coords[0], coords[2]), 
-            coords[1] - coords[0], 
-            coords[3] - coords[2], 
+            (coords[0], coords[1]), 
+            coords[2] - coords[0], 
+            coords[3] - coords[1], 
             linewidth=1,edgecolor='b',facecolor='none')
 
         print(f"{ro['class']} coordinates: {coords}")
@@ -368,7 +377,7 @@ def plot_single_frame_with_outlines(frame_object, images_dir, score_thresh=0.5):
     plt.show()
 
 # Parses all the ground truth labels and returns a pandas dataframe
-def gt_as_pd_df(annotation_dir, IMG_SIZE):
+def gt_as_pd_df(annotation_dir, IMG_SIZE=None):
     all_annotation_frames = [os.path.join(annotation_dir, a) for a in os.listdir(annotation_dir) if re.search('xml$', a)]
     all_annotation_frames.sort()
 
@@ -396,3 +405,41 @@ def gt_as_pd_df(annotation_dir, IMG_SIZE):
                 
     final_data_df = pd.DataFrame(final_data)
     return final_data_df
+
+def label_tp_fp_in_output(output_df, gt_df, iou_threshold=0.5):
+    output_df = output_df.sort_values(by='score', ascending=False)
+
+    all_candidates= set()
+    row_match_type = []
+    iou_col = []
+
+    for ri in tqdm.tqdm(range(len(output_df))):
+        row = output_df.iloc[ri,].values
+        candidates = gt_df[(gt_df['video_id']==row[1]) & (gt_df['frame_id']==row[2]) & (gt_df['tool']==row[3])]
+
+        match_type = 'FP'
+        current_best_candidate = -1
+        current_best_score = -1
+
+        for i in candidates.index:
+            #  Not a candidate if it already has matched
+            if i in all_candidates:
+                continue
+
+            current_cand = candidates.loc[i,].values
+            current_iou = bb_intersection_over_union(row[5:], current_cand[4:])
+            
+            if current_iou > iou_threshold and current_iou > current_best_score:
+                if current_best_candidate >= 0:
+                    all_candidates.remove(current_best_candidate) # Previous
+                all_candidates.add(i) # Marked as taken
+                current_best_score = current_iou
+                match_type = 'TP'
+
+        iou_col.append(current_best_score)
+        row_match_type.append(match_type)
+
+    output_df['IOU'] = [i for i in iou_col]
+    output_df['TP'] = [1 if i == 'TP' else 0 for i in row_match_type]
+    output_df['FP'] = [1 if i == 'FP' else 0 for i in row_match_type]
+    return output_df   
