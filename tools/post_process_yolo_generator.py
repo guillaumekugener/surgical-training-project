@@ -47,6 +47,7 @@ class PostProcessYoloGenerator(Sequence):
         for k in self.video_ids:
             with open(os.path.join(self.video_data_dir, k + ext), 'rb') as stats_array:
                 self.data[k] = pickle.load(stats_array)
+
             # Also, set the video frame size (should be square)
             example_frame = [os.path.join(self.annotation_dir, i) for i in os.listdir(self.annotation_dir) if re.search('^' + k, i)][0]
             annotation_xml = etree.parse(example_frame)
@@ -118,6 +119,7 @@ class PostProcessYoloGenerator(Sequence):
 
         for obj in annotation_xml.findall('object'):
             true_class = obj.find('name').text # Have to turn this from text to index
+
             if true_class not in self.classes_map:
                 continue # We are not training on this object
 
@@ -135,6 +137,31 @@ class PostProcessYoloGenerator(Sequence):
 
         return annotation_object
 
+    def __generate_X(self, frame_id, frame_id_fill_length=8):
+        # Get the heatmaps for the frame_id and the five previous ones (so seq length is 6)
+        video_id = re.sub('_.*', '', frame_id)
+        frame_id_as_int = int(re.sub('(.*frame_)|(_tool.*)', '', frame_id))
+        tool_id = int(re.sub('.*tool_', '', frame_id))
+
+        heatmap_seq = []
+        frame_labels = []
+
+        for fid in range(frame_id_as_int - self.seq_len + 1, frame_id_as_int + 1):
+            tool_id = int(re.sub('.*tool_', '', frame_id))
+            # Probably want to make this a function
+            frame_id_full = video_id + '_frame_' + str(fid).zfill(frame_id_fill_length)
+            # Heatmap of all object in this frame
+            h1 = self.generate_heatmap(frame_id_full, objects=range(0, self.n_objects))
+            h2 = self.generate_heatmap(frame_id_full, objects=[tool_id])
+
+            # Flatten and combine the heatmaps (h1: is the full, h2: is of only the specific tool)
+            heatmap_seq.append(np.concatenate((
+                np.array(h1).flatten(),
+                np.array(h2).flatten()
+            )))
+
+        return np.array(heatmap_seq)
+
     def __data_generation(self, frame_ids, frame_id_fill_length=8):
         # This is where we load are data in
         X = np.empty((self.batch_size, *self.dim))
@@ -142,29 +169,12 @@ class PostProcessYoloGenerator(Sequence):
 
         # Each frame is labeled as <video_id>_<frame_id>_<tool_id>
         for i, frame_id in enumerate(frame_ids):
-            # Store sample
             # Get the heatmaps for the frame_id and the five previous ones (so seq length is 6)
-            video_id = re.sub('_.*', '', frame_id)
-            frame_id_as_int = int(re.sub('(.*frame_)|(_tool.*)', '', frame_id))
-            tool_id = int(re.sub('.*tool_', '', frame_id))
-
-            heatmap_seq = []
-            frame_labels = []
-
-            for fid in range(frame_id_as_int - self.seq_len + 1, frame_id_as_int + 1):
-                # Probably want to make this a function
-                frame_id_full = video_id + '_frame_' + str(fid).zfill(frame_id_fill_length)
-                # Heatmap of all object in this frame
-                h1 = self.generate_heatmap(frame_id_full, objects=range(0, self.n_objects))
-                h2 = self.generate_heatmap(frame_id_full, objects=[tool_id])
-
-                # Flatten and combine the heatmaps (h1: is the full, h2: is of only the specific tool)
-                heatmap_seq.append(np.concatenate((
-                    np.array(h1).flatten(),
-                    np.array(h2).flatten()
-                )))
+            X[i,] = self.__generate_X(frame_id, frame_id_fill_length) # Should be sequence x grid length
 
             # Now make the label
+            tool_id = int(re.sub('.*tool_', '', frame_id)) # The only tool we care about in this particular frame
+
             annotation_for_frame = self.get_frame_annotations(frame_id, [tool_id])
             labels_all = []
             for o in annotation_for_frame['objects']:
@@ -174,7 +184,6 @@ class PostProcessYoloGenerator(Sequence):
                 labels_all.append([0,0,0,0,0])
 
             # Store label
-            X[i,] = np.array(heatmap_seq) # Should be sequence x grid length
             y[i,] = np.array(labels_all).flatten() # Should be 5 x number of objects per tool
 
         return X, y
@@ -220,3 +229,84 @@ class PostProcessYoloGenerator(Sequence):
             y[i,] = np.array(labels_all).flatten() # Should be 5 x number of objects per tool
         
         return X, y
+
+
+class PostProcessYoloDetectionGenerator(PostProcessYoloGenerator):
+    def __init__(self, video_ids, video_data_dir, annotation_dir, frame_ids, classes_map, batch_size=32, seq_len=6, grid_size=32, n_objects=2, out_n_objects=5):
+        self.batch_size = batch_size
+        self.video_ids = [k for k in video_ids] # The video ids of videos present in this generator
+        self.video_offsets = video_ids # Counter intuitive but this is a dict that holds the start frame index
+        self.video_data_dir = video_data_dir
+        self.video_image_sizes = {} # We will determine them once and then avoid having to recalculate them
+        self.annotation_dir = annotation_dir # All the annotations should be in this directory
+        self.classes_map = classes_map # Dictionary of tool name to int id
+        self.index_to_class = [0] * len(classes_map)
+        for i in self.classes_map:
+            self.index_to_class[self.classes_map[i]] = i
+
+        self.seq_len = seq_len
+        self.grid_size = grid_size
+        self.dim = (seq_len, grid_size * grid_size * 2) # Features
+        self.n_objects = n_objects
+        self.out_dim = out_n_objects # Because we are predicting score (1) + bounding boxes (4)
+
+        self.frame_ids = frame_ids # All the frames to be processed by this generator
+        self.__load_all_stats()
+
+        self.shuffle = False
+
+        self.on_epoch_end()
+
+    # Load the outputs from YOLO
+    def __load_all_stats(self, ext='_stats.pkl'):
+        self.data = {}
+        for k in self.video_ids:
+            with open(os.path.join(self.video_data_dir, k + ext), 'rb') as stats_array:
+                self.data[k] = pickle.load(stats_array)
+
+    def __generate_X(self, frame_id, frame_id_fill_length=8):
+        # Get the heatmaps for the frame_id and the five previous ones (so seq length is 6)
+        video_id = re.sub('_.*', '', frame_id)
+        frame_id_as_int = int(re.sub('(.*frame_)|(_tool.*)', '', frame_id))
+        tool_id = int(re.sub('.*tool_', '', frame_id))
+
+        heatmap_seq = []
+        frame_labels = []
+
+        for fid in range(frame_id_as_int - self.seq_len + 1, frame_id_as_int + 1):
+            tool_id = int(re.sub('.*tool_', '', frame_id))
+            # Probably want to make this a function
+            frame_id_full = video_id + '_frame_' + str(fid).zfill(frame_id_fill_length)
+            # Heatmap of all object in this frame
+            h1 = self.generate_heatmap(frame_id_full, objects=range(0, self.n_objects))
+            h2 = self.generate_heatmap(frame_id_full, objects=[tool_id])
+
+            # Flatten and combine the heatmaps (h1: is the full, h2: is of only the specific tool)
+            heatmap_seq.append(np.concatenate((
+                np.array(h1).flatten(),
+                np.array(h2).flatten()
+            )))
+
+        return np.array(heatmap_seq)
+
+    def __data_generation(self, frame_ids, frame_id_fill_length=8):
+        # This is where we load are data in
+        X = np.empty((self.batch_size, *self.dim))
+
+        # Each frame is labeled as <video_id>_<frame_id>_<tool_id>
+        for i, frame_id in enumerate(frame_ids):
+            # Get the heatmaps for the frame_id and the five previous ones (so seq length is 6)
+            X[i,] = self.__generate_X(frame_id, frame_id_fill_length) # Should be sequence x grid length
+
+        return X
+
+    def __getitem__(self, index):
+        # Generate indexes of the batch
+        indexes = self.indexes[index*self.batch_size:(index+1)*self.batch_size]
+
+        frame_ids = [self.frame_ids[k] for k in indexes]
+
+        # Generate the data
+        X = self.__data_generation(frame_ids)
+
+        return X
