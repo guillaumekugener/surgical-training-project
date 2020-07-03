@@ -162,7 +162,7 @@ for (ds in names(ds_list)) {
 ```{r fig.height=12}
 training_iou <- 0.5
 
-ggplot(combined_data_for_all_training_all_tools %>%
+training_ap_plot <- ggplot(combined_data_for_all_training_all_tools %>%
     filter(iou==training_iou), 
   aes(recall, precision, color=model)) +
   geom_line() +
@@ -182,6 +182,8 @@ ggplot(combined_data_for_all_training_all_tools %>%
   scale_x_continuous(limits = c(0, 1)) +
   scale_y_continuous(limits = c(0, 1)) +
   facet_wrap(tool~video_id, ncol=3)
+
+ggsave(training_ap_plot, filename=file.path(auto_plot_dir, 'training_ap.png'), height=12, width = 12)
 ```
 
 ## Validation set
@@ -213,7 +215,7 @@ for (ds in names(ds_list)) {
 ```{r}
 validation_iou <- 0.5
 
-ggplot(validation_combined_tools %>%
+validation_ap_plot <- ggplot(validation_combined_tools %>%
     filter(iou==validation_iou), 
   aes(recall, precision, color=model)) +
   geom_line() +
@@ -233,6 +235,10 @@ ggplot(validation_combined_tools %>%
   scale_x_continuous(limits = c(0, 1)) +
   scale_y_continuous(limits = c(0, 1)) +
   facet_wrap(tool~video_id, ncol=3)
+
+validation_ap_plot
+
+ggsave(validation_ap_plot, filename=file.path(auto_plot_dir, 'validation_ap.png'), height=6, width = 8)
 ```
 
 ```{r}
