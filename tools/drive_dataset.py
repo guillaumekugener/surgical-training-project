@@ -22,12 +22,15 @@ import numpy as np
 from utils import plot_frame_with_bb
 
 class SurgicalVideoAnnotation():
-    def __init__(self, trial_id, file_path, total_frames, output_directory, delete_at_end=True, assume_missing_empty=True, annotations_only=True):
+    def __init__(self, trial_id, file_path, total_frames, output_directory, delete_at_end=True, assume_missing_empty=True, annotations_only=True, manually_fixed_cases=None):
         self.trial_id = trial_id
         self.file_path = file_path
         self.total_frames = total_frames
         self.output_directory=output_directory
         self.classes = {}
+        self.manually_fixed_cases = pd.DataFrame({'name' : [], 'x1': [], 'y1': [], 'x2': [], 'y2': [], 'class': []})
+        if manually_fixed_cases is not None:
+            self.manually_fixed_cases = pd.read_csv(manually_fixed_cases)
 
         # We need to to keep track of missing annotations (or we assume they are empty)
         self.assume_missing_empty = assume_missing_empty
@@ -41,6 +44,7 @@ class SurgicalVideoAnnotation():
         # Get the relevant json file
         self.images = [i for i in zf.namelist() if re.search('vott\\-json\\-export/.*jpeg$', i)]
         self.annotations_json = [i for i in zf.namelist() if re.search('vott\\-json\\-export/.*\\.json$', i)][0]
+        self.frame_objects = []
 
         zf.extractall() # It's in current directory
 
@@ -120,14 +124,29 @@ class SurgicalVideoAnnotation():
                 region_class = r['tags'][0]
                 # Check if we have wrong number of tags. These samples will be fixed by hand
                 if len(r['tags']) != 1:
-                    self.too_many_tags_frames.append({
-                        'name': data['assets'][i]['asset']['name'],
-                        'd': data['assets'][i]['regions']
-                    })
-                    # print(f"We have a problem with a region in {frame_object['name']} with tags. The object tags are: {r['tags']}")
-                    # In this case, set the tag to be undefined, and we will manually define it after the dataset is generated
+                    # In this case, we had to manually fix it or will have to.
+                    # Look in the manually fixed csv to see if we have dealth with this case before
                     region_class = 'undefined'
-                
+
+                    matching_region = self.manually_fixed_cases[
+                        (self.manually_fixed_cases['name']==data['assets'][i]['asset']['name']) &
+                        (self.manually_fixed_cases['x1']==round(r['boundingBox']['left'])) &
+                        (self.manually_fixed_cases['y1']==round(r['boundingBox']['top'])) &
+                        (self.manually_fixed_cases['x2']==round(r['boundingBox']['left'] + r['boundingBox']['width'])) &
+                        (self.manually_fixed_cases['y2']==round(r['boundingBox']['top'] + r['boundingBox']['height']))
+                    ]
+
+                    # If we found a single match, the change the class to what it should be
+                    if matching_region.shape[0] == 1:
+                        region_class = matching_region['class'].values[0]
+
+                    # This is still a frame we need to fix manually
+                    if region_class == 'undefined':
+                        self.too_many_tags_frames.append({
+                            'name': data['assets'][i]['asset']['name'],
+                            'd': data['assets'][i]['regions']
+                        })
+
                 # Keep track of how many total objects of each class we have in our datasets
                 if region_class not in self.classes:
                     self.classes[region_class] = 0
@@ -147,11 +166,32 @@ class SurgicalVideoAnnotation():
                     ]
                 })
 
+                # Add all our tools to frame objects
+                self.frame_objects.append({
+                    'name': data['assets'][i]['asset']['name'],
+                    'x1': round(r['boundingBox']['left']),
+                    'y1': round(r['boundingBox']['top']),
+                    'x2': round(r['boundingBox']['left'] + r['boundingBox']['width']),
+                    'y2': round(r['boundingBox']['top'] + r['boundingBox']['height']),
+                    'class': region_class
+                })
+
             # Now generate the annotations file
             self.generate_frame_annotation_xml(
                 frame_obj=frame_object,
                 destination=os.path.join(self.output_directory, 'Annotations')
             )
+
+            # If number of regions is null, we need to add an empty row for this frame
+            if len(regions) == 0:
+                self.frame_objects.append({
+                    'name': data['assets'][i]['asset']['name'],
+                    'x1': '',
+                    'y1': '',
+                    'x2': '',
+                    'y2': '',
+                    'class': ''
+                })
 
         # Create the annotations for the missing frames
         if self.assume_missing_empty:
@@ -162,6 +202,16 @@ class SurgicalVideoAnnotation():
                     'width': image_size[0],
                     'tools': []
                 }
+
+                # Add this to our frame objects array
+                self.frame_objects.append({
+                    'name': ef,
+                    'x1': '',
+                    'y1': '',
+                    'x2': '',
+                    'y2': '',
+                    'class': ''
+                })
 
                 # Now generate the annotations file
                 self.generate_frame_annotation_xml(
