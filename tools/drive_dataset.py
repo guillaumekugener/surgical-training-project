@@ -130,10 +130,10 @@ class SurgicalVideoAnnotation():
 
                     matching_region = self.manually_fixed_cases[
                         (self.manually_fixed_cases['name']==data['assets'][i]['asset']['name']) &
-                        (self.manually_fixed_cases['x1']==round(r['boundingBox']['left'])) &
-                        (self.manually_fixed_cases['y1']==round(r['boundingBox']['top'])) &
-                        (self.manually_fixed_cases['x2']==round(r['boundingBox']['left'] + r['boundingBox']['width'])) &
-                        (self.manually_fixed_cases['y2']==round(r['boundingBox']['top'] + r['boundingBox']['height']))
+                        (self.manually_fixed_cases['x1']==floor(r['boundingBox']['left'])) &
+                        (self.manually_fixed_cases['y1']==floor(r['boundingBox']['top'])) &
+                        (self.manually_fixed_cases['x2']==min(image_size[0], ceil(r['boundingBox']['left'] + r['boundingBox']['width']))) &
+                        (self.manually_fixed_cases['y2']==min(image_size[1], ceil(r['boundingBox']['top'] + r['boundingBox']['height'])))
                     ]
 
                     # If we found a single match, the change the class to what it should be
@@ -156,12 +156,12 @@ class SurgicalVideoAnnotation():
                     'type': region_class,
                     'coordinates': [
                         (
-                            round(r['boundingBox']['left']), 
-                            round(r['boundingBox']['top'])
+                            floor(r['boundingBox']['left']), 
+                            floor(r['boundingBox']['top'])
                         ),
                         (
-                            round(r['boundingBox']['left'] + r['boundingBox']['width']),
-                            round(r['boundingBox']['top'] + r['boundingBox']['height'])
+                            min(image_size[0], ceil(r['boundingBox']['left'] + r['boundingBox']['width'])),
+                            min(image_size[1], ceil(r['boundingBox']['top'] + r['boundingBox']['height']))
                         )
                     ]
                 })
@@ -169,10 +169,10 @@ class SurgicalVideoAnnotation():
                 # Add all our tools to frame objects
                 self.frame_objects.append({
                     'name': data['assets'][i]['asset']['name'],
-                    'x1': round(r['boundingBox']['left']),
-                    'y1': round(r['boundingBox']['top']),
-                    'x2': round(r['boundingBox']['left'] + r['boundingBox']['width']),
-                    'y2': round(r['boundingBox']['top'] + r['boundingBox']['height']),
+                    'x1': floor(r['boundingBox']['left']),
+                    'y1': floor(r['boundingBox']['top']),
+                    'x2': min(image_size[0], ceil(r['boundingBox']['left'] + r['boundingBox']['width'])),
+                    'y2': min(image_size[1], ceil(r['boundingBox']['top'] + r['boundingBox']['height'])),
                     'class': region_class
                 })
 
@@ -332,3 +332,20 @@ def extract_and_move_images(dir_with_image_zips, output_directory, trials_to_pro
 
         zf.close()
 
+def create_retinanet_csv(all_objects_ds_df, dir_prefix, final_dataset_directory, csv_name, validation_trials=[]):
+    validation_indices = all_objects_ds_df['name'].str.contains('|'.join(validation_trials))
+    retinanet_training_csv = all_objects_ds_df[~validation_indices].copy()
+    retinanet_validation_csv = all_objects_ds_df[validation_indices].copy()
+
+    retinanet_training_csv['name'] = dir_prefix + retinanet_training_csv['name']
+    retinanet_validation_csv['name'] = dir_prefix + retinanet_validation_csv['name']
+
+    # We need to set the full path    
+    retinanet_training_csv.to_csv(
+        os.path.join(final_dataset_directory, 'ImageSets/Main', csv_name + '_train.csv'),
+        sep=',', header=False, index=False
+    )
+    retinanet_validation_csv.to_csv(
+        os.path.join(final_dataset_directory, 'ImageSets/Main', csv_name + '_validation.csv'),
+        sep=',', header=False, index=False
+    )
