@@ -293,18 +293,22 @@ def combine_predictions_and_ground_truth(all_frames, classes_map, detected_objec
         all_frames_objects.append(data_to_append)
     return(all_frames_objects)
 
-def make_frame_object_from_file(file_path, IMG_SIZE=None):
+def make_frame_object_from_file(file_path, IMG_SIZE=(None, None), scale=True):
     annotation_xml = etree.parse(file_path)
 
-    if IMG_SIZE is None:
+    img_height = IMG_SIZE[1]
+    img_width = IMG_SIZE[0]
+    if IMG_SIZE[0] is None:
         # Set the image size
         for node in annotation_xml.iter('size'):
             for sn in node.iter('width'):
-                IMG_SIZE = float(sn.text)
+                img_width = float(sn.text)
             for sn in node.iter('height'):
-                if float(sn.text) != IMG_SIZE:
-                    # The annotations are not square
-                    print('The annotations are not square so dimensions will be off')
+                img_height = float(sn.text)
+
+    if not scale:
+        img_height = 1
+        img_width = 1
 
     data_to_append = { 'frame_id': file_path, 'objects': [] }
     for obj in annotation_xml.findall('object'):
@@ -312,7 +316,10 @@ def make_frame_object_from_file(file_path, IMG_SIZE=None):
         
         true_coordinates = []
         for corner in ['xmin', 'ymin', 'xmax', 'ymax']:
-            true_coordinates.append(float(obj.find('bndbox').find(corner).text)/IMG_SIZE)
+            denom = img_height
+            if corner in ['xmin', 'xmax']:
+                denom = img_width
+            true_coordinates.append(float(obj.find('bndbox').find(corner).text)/denom)
         data_to_append['objects'].append({ 
             'class': true_class, 
             'coords': true_coordinates
