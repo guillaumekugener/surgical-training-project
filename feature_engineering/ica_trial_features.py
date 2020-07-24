@@ -54,6 +54,7 @@ class ICATrialFeatures:
 				break
 
 		return video
+		
 """
 VideoTrial
 
@@ -204,6 +205,27 @@ class VideoTrial:
 		return velocities
 
 	"""
+	Get area covered by tool
+	"""
+	def get_area_covered_by_tool(self, tool, n=None):
+		area_covered = []
+
+		frames = self.frames[:]
+		if n is not None:
+			frames = frames[:n]
+
+		for f in frames:
+			relevant_tools = f.get_specific_tool(tool)
+
+			tot_area = 0
+			for rt in relevant_tools:	
+				tot_area += rt.get_area()
+
+			area_covered.append(tot_area)
+
+		return area_covered
+
+	"""
 	Plot tools over all frames
 
 	Plots the center of each tool across all frames (as a scatter plot)
@@ -286,6 +308,19 @@ class VideoTrial:
 		plt.imshow(tool_heatmap, cmap='hot', interpolation='nearest')
 		plt.show()
 
+	"""Get n tools in view across frames"""
+	def get_n_tools_in_view(self, ignore=[], n=None):
+		n_tools_in_view = []
+		frames = self.frames[:]
+
+		if n is not None:
+			frames = frames[:n]
+
+		for f in frames:
+			n_tools_in_view.append(len(f.get_tools(ignore=ignore)))
+
+		return n_tools_in_view
+
 """
 IndividualFrame
 
@@ -299,14 +334,20 @@ class IndividualFrame:
 	):
 		self.frame_data = frame_data.reset_index()
 		self.frame_name = self.frame_data['file'][0]
-		self.tools = self.get_tools_in_frame()
+		self.tools = self.get_tools()
 		self.frame_size = frame_size
 
 	"""Get the tools in this frame"""
-	def get_tools_in_frame(self):
+	def get_tools(self, ignore=[]):
 		tools = []
 
+		if len(ignore) > 0:
+			ignore = set(ignore)
+
 		for i in range(self.frame_data.shape[0]):
+			if self.frame_data['class'][i] in ignore:
+				continue
+
 			x1, y1, x2, y2 = self.frame_data.loc[i,['x1', 'y1', 'x2', 'y2']]
 			tools.append(SurgicalTool(
 				tool_name=self.frame_data['class'][i],
@@ -429,5 +470,20 @@ def overlap_area(a, b):
 	if (dx >= 0) and (dy >= 0):
 		return dx * dy
 
+"""
+Get overlapping area between two tools
+"""
+def get_overlap_between_tools(t1, t2):
+	t1d = t1.get_standard_coordinates()
+	t2d = t2.get_standard_coordinates()
+	
+	return overlap_area(t1d, t2d)
 
+"""
+Get the distance between two tools
+"""
+def get_distance_between_tools(t1, t2):
+	t1d = t1.get_tool_position()
+	t2d = t2.get_tool_position()
 
+	return sqrt((t2d[1] - t1d[1])**2 + (t2d[0] - t1d[0])**2)
