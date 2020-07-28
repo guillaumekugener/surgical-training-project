@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 from seaborn import scatterplot
 
 from math import sqrt, floor, ceil
+from scipy.stats import ttest_rel
 
 """
 ICATrialFeatures
@@ -33,10 +34,15 @@ class ICATrialFeatures:
 		self.verbose = verbose
 
 		self.videos = self.__build_videos()
+		self.participants = [re.sub('S', '', i) for i in set([re.search('S[0-9]+', j).group(0) for j in self.get_videos_in_set()])]
 
 	"""Get all of the trials in this data set"""
 	def get_videos_in_set(self):
 		return set(self.data['vid'])
+
+	"""Get trials in set"""
+	def get_participants_in_set(self):
+		return self.participants[:]
 
 	""""""
 	def __build_videos(self):
@@ -85,6 +91,59 @@ class ICATrialFeatures:
 		output_dict['trial'] = [re.sub('S[0-9]+T', '', i) for i in output_dict['vid']]
 		return pd.DataFrame(output_dict)
 
+	"""
+	Compare metrics between two groups
+
+	Given two lists of video ids, will run a t-test comparing
+	the metrics between those two groups of videos
+
+	TODO: make sure that paired implementation is correctly implemented. 
+	Want to validate that if our set does not have both pairs that it should 
+	exlucde both etc...
+	"""
+	def compare_metrics_t1_t2(self, tools=[], trials=[]):
+		# first, get the metrics
+		set_metrics = self.get_metrics(tools=tools).set_index('vid')
+
+		metrics = [i for i in set_metrics.columns.values if i not in ['vid', 'frames', 'trial']]
+
+		t_test_results = {
+			'metric': [],
+			'mean_g1': [],
+			'mean_g2': [],
+			't_stat': [],
+			'p': []
+		}
+		missed = set()
+		for m in metrics:
+			g1_values = []
+			g2_values = []
+
+			for t in trials:
+				# check that both trials are in the dataset
+				if ('S' + t + 'T1' not in set_metrics.index) or ('S' + t + 'T2' not in set_metrics.index):
+					missed.add(t)
+					continue
+
+				g1_values.append(set_metrics.loc['S' + t + 'T1', m])
+				g2_values.append(set_metrics.loc['S' + t + 'T2', m])
+
+			# now compute the t test for the metrics
+			t_test_out = ttest_rel(g1_values, g2_values)
+			mean_g1 = np.mean(g1_values)
+			mean_g2 = np.mean(g2_values)
+
+			t_test_results['metric'].append(m)
+			t_test_results['mean_g1'].append(mean_g1)
+			t_test_results['mean_g2'].append(mean_g2)
+			t_test_results['t_stat'].append(t_test_out[0])
+			t_test_results['p'].append(t_test_out[1])
+
+		# print the samples that were missing
+		for t in missed:
+			print(f"{t} is missing either T1, T2 or both or is in chunks")
+
+		return pd.DataFrame(t_test_results)
 
 
 """
