@@ -25,6 +25,7 @@ flags.DEFINE_integer('downsample', -1, 'downsample FPS')
 flags.DEFINE_boolean('overwrite', False, 'overwrites the existing downsample')
 flags.DEFINE_string('f1', 'XXX', 'F1 column from trial timepoints data (e.g: Park City 2019 Sim)')
 flags.DEFINE_string('f2', 'XXX', 'F2 column from trial timepoints data (e.g: 01182019_170211)')
+flags.DEFINE_string('bash_path', '~/Downloads/', 'directory to save bash file that has all of the zip commands')
 
 FLAGS(sys.argv)
 
@@ -35,7 +36,7 @@ video_file_name = FLAGS.video
 BUFFER = 0 # How many seconds to buffer the start and stop frames
 
 # If downsample is passed, we downsample the frame
-VIDEO_ID = re.sub('\\.mp4$', '', re.sub('.*/', '', video_file_name))
+VIDEO_ID = re.sub('\\.(mp|MP)4$', '', re.sub('.*/', '', video_file_name))
 
 
 if FLAGS.downsample > 0:
@@ -106,7 +107,7 @@ for trial_name in all_trials_in_video:
 	conversion_process.communicate()
 
 	# Zip file
-	zip_command = f"zip {os.path.join(FLAGS.output, 'zips', trial_name)}-downsampled.zip {os.path.join(FLAGS.output, 'frames', trial_name)}*.jpeg"
+	zip_command = f"zip -0 -j {os.path.join(FLAGS.output, 'zips', trial_name)}-downsampled.zip {os.path.join(FLAGS.output, 'frames', trial_name)}*.jpeg"
 	zip_commands_all.append(zip_command)
 	# zip_process = subprocess.Popen(zip_command)
 	# zip_process.communicate()
@@ -125,5 +126,11 @@ for trial_name in all_trials_in_video:
 	# 	file_name = i.zfill(8)
 	# 	os.remove(os.path.join(output_directory, trial_name, 'frame_' + file_name + '.jpeg'))
 
+# Should write to a bash file instead that I can then execute
+zip_f = open(os.path.join(FLAGS.bash_path, 'zip_files_video.sh'), 'a')
+
 for c in zip_commands_all:
+	zip_f.write(c + '\n')
 	print(c)
+
+zip_f.close()
