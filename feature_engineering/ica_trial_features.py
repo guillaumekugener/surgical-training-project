@@ -21,16 +21,26 @@ class ICATrialFeatures:
 		self,
 		csv_file_name,
 		csv_class_file,
-		verbose=False
+		csv_outcomes_file=None,
+		verbose=False,
+		trials_to_ignore=[]
 	):
 		self.csv_file_name = csv_file_name
 		
 		na_values = {'file': 0, 'x1': 0, 'y1': 0, 'x2': 0, 'y2': 0, 'class': ''}
 
-		self.data = pd.read_csv(os.path.join(csv_file_name), names=['file', 'x1', 'y1', 'x2', 'y2', 'class'])
+		self.data = pd.read_csv(csv_file_name, names=['file', 'x1', 'y1', 'x2', 'y2', 'class'])
 		self.data = self.data.fillna(value=na_values)
-		self.data['vid'] = [re.search('S[0-9]+T[0-9]+[a-z]?', i).group(0) for i in self.data['file']]
-		self.classes = pd.read_csv(os.path.join(csv_class_file), names=['class', 'ind'])
+		self.data['original_vid'] = [re.search('S[0-9]+T[0-9]+[a-z]?', i).group(0) for i in self.data['file']]
+
+		# some videos were separated. combine them all here
+		self.__merge_fragmented_videos()
+
+		# remove trials to ignore
+		self.data = self.data[~self.data['vid'].isin(trials_to_ignore)]
+
+		self.classes = pd.read_csv(csv_class_file, names=['class', 'ind'])
+		self.outcomes_data = pd.read_csv(csv_outcomes_file)
 		self.verbose = verbose
 
 		self.videos = self.__build_videos()
@@ -44,16 +54,32 @@ class ICATrialFeatures:
 	def get_participants_in_set(self):
 		return self.participants[:]
 
+	"""
+	Merge fragmented videos
+
+	Two things to do:
+	- new column named vid with proper name (easy)
+	- have to fix frame indexing (create f_index column)
+
+	Updates self.data directly
+	"""
+	def __merge_fragmented_videos(self):
+		self.data['vid'] = [re.sub('[a-z]+$', '', i) for i in self.data['original_vid']]
+		# the rank method (i.e. first, last tie) does not matter, 
+		# since the order in which the tools in a frame does not mater
+		self.data['f_index'] = self.data.groupby("vid")["file"].apply(lambda x: x.rank())
+
 	""""""
 	def __build_videos(self):
 		vids = self.get_videos_in_set()
 		videos = []
 
-		for vid in vids:
+		for vid in progressbar.progressbar(vids):
 			videos.append(VideoTrial(
 				video_data=self.data[self.data['vid']==vid], 
 				video_id=vid,
-				verbose=self.verbose
+				verbose=self.verbose,
+				outcomes_data=self.outcomes_data[self.outcomes_data['SurveyID']==get_participant_id_from_string(vid)]
 			))
 
 		return videos
@@ -89,6 +115,24 @@ class ICATrialFeatures:
 				output_dict[k].append(video_metrics[k])
 
 		output_dict['trial'] = [re.sub('S[0-9]+T', '', i) for i in output_dict['vid']]
+		return pd.DataFrame(output_dict)
+
+	"""Get outcomes data"""
+	def get_outcomes_data(self):
+		output_dict = { 'vid': [] }
+
+		for video in progressbar.progressbar(self.videos):
+			output_dict['vid'].append(video.get_video_id())
+
+			video_metrics = video.get_outcomes_data()
+
+			for k in video_metrics:
+				if k not in output_dict:
+					output_dict[k] = []
+				output_dict[k].append(video_metrics[k])
+
+		output_dict['trial'] = [re.sub('S[0-9]+T', '', i) for i in output_dict['vid']]
+
 		return pd.DataFrame(output_dict)
 
 	"""
@@ -156,6 +200,7 @@ class VideoTrial:
 		self,
 		video_data,
 		video_id, 
+		outcomes_data,
 		frame_size=None,
 		verbose=False
 	):
@@ -164,7 +209,7 @@ class VideoTrial:
 		self.verbose = verbose
 		self.frame_size = self.__set_frame_size(frame_size)
 		self.frames = self.__build_frames()
-
+		self.outcomes_data = self.__format_outcomes_data(outcomes_data.reset_index())
 	"""
 	Set video size
 
@@ -190,6 +235,11 @@ class VideoTrial:
 	def get_video_id(self):
 		return self.video_id
 
+	"""Get trial number"""
+	def get_trial_number(self):
+		s = re.search('T[0-9]+', self.get_video_id()).group(0)
+		return s[1:]
+
 	"""Get length of video"""
 	def get_video_length(self):
 		return len(set([i for i in self.video_data['file']]))
@@ -207,8 +257,47 @@ class VideoTrial:
 			))
 
 		# We need them to be sorted for future operations
-		frames.sort(key=lambda f: f.frame_name)
+		frames.sort(key=lambda f: f.frame_index)
 		return frames
+
+	"""
+	Format outcomes data
+
+	Returns a dict for all of the important stats based on the outcomes
+	data file
+	"""
+	def __format_outcomes_data(self, outcomes_data):
+		if outcomes_data.shape[0] != 1:
+			return {}
+
+		trial_num = self.get_trial_number()
+
+		outcomes_metrics = [
+			'Group', 'Source', 'Specialty',
+			'Totyears', 'Attyears', 'Resyears',
+			'endolast12mo', 'cadaverlast12',
+			'priorreal', 'priorsim', 'simonly', 'realandsim',
+			'generalconfidencepre', 'carotidconfidencepre',
+			'generalconfidencepost', 'carotidconfidencepost',
+			'Trial _num_ TTH', 'Trial _num_ Success', 'Trial _num_ EBL', 
+
+		]
+		
+		outcomes_dict = {}
+		for c in outcomes_metrics:
+			# looks complex but isn't: we extract the TTH, EBL, and Success
+			# value based on the trial number in the video id
+			# then we assign it to Trial TTH, EBL, Success (without trial
+			# number in the name) in the output dict. this will make
+			# downstream processing easier
+			ci = re.sub('_num_', trial_num, c)
+			outcomes_dict[re.sub('_num_ ', '', c)] = outcomes_data[ci][0]
+
+		return outcomes_dict
+
+	"""Get outcomes data"""
+	def get_outcomes_data(self):
+		return self.outcomes_data.copy()
 
 	"""Get number of frames video"""
 	def number_of_frames(self):
@@ -729,3 +818,20 @@ def get_distance_between_tools(t1, t2):
 	t2d = t2.get_tool_position()
 
 	return sqrt((t2d[1] - t1d[1])**2 + (t2d[0] - t1d[0])**2)
+
+
+"""
+Get participant ID from string
+"""
+def get_participant_id_from_string(s):
+	# remove any file prefixes
+	s = re.sub('.*/', '', s)
+	s = re.search('^S[0-9]+', s).group(0)
+
+	# remove the S prefix
+	s = s[1:]
+
+	return s
+
+
+
