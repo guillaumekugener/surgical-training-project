@@ -8,7 +8,9 @@ import matplotlib.pyplot as plt
 from seaborn import scatterplot
 
 from math import sqrt, floor, ceil
-from scipy.stats import ttest_rel
+from scipy.stats import (
+	ttest_rel, ttest_ind
+)
 
 """
 ICATrialFeatures
@@ -189,6 +191,54 @@ class ICATrialFeatures:
 
 		return pd.DataFrame(t_test_results)
 
+	"""
+	Compare metrics successful trial vs. unsuccessful
+
+	Similar to comparing metrics of T1 vs. T2 but this time
+	grouped based on trial success
+	"""
+	def compare_successful_vs_failed(self, tools=[]):
+		set_metrics = self.get_metrics(tools=tools).set_index('vid')
+		set_outcomes = self.get_outcomes_data().set_index('vid')
+
+		metrics = [i for i in set_metrics.columns.values if i not in ['vid', 'frames', 'trial']]
+
+		t_test_results = {
+			'metric': [],
+			'mean_f': [],
+			'mean_s': [],
+			't_stat': [],
+			'p': []
+		}
+		missed = set()
+		trials = set_metrics.index[:]
+		for m in metrics:
+			f_values = []
+			s_values = []
+
+			for t in trials:
+				if set_outcomes.loc[t, 'Trial Success'] == 1:
+					s_values.append(set_metrics.loc[t, m])
+				else:
+					f_values.append(set_metrics.loc[t, m])
+
+			# now compute the t test for the metrics
+			t_test_out = ttest_ind(f_values, s_values)
+			mean_f = np.mean(f_values)
+			mean_s = np.mean(s_values)
+
+			t_test_results['metric'].append(m)
+			t_test_results['mean_f'].append(mean_f)
+			t_test_results['mean_s'].append(mean_s)
+			t_test_results['t_stat'].append(t_test_out[0])
+			t_test_results['p'].append(t_test_out[1])
+
+		# print the samples that were missing
+		for t in missed:
+			print(f"{t} is missing either T1, T2 or both or is in chunks")
+
+		return pd.DataFrame(t_test_results)
+
 
 """
 VideoTrial
@@ -224,9 +274,13 @@ class VideoTrial:
 
 			if max_y == 720:
 				frame_size = (1280, 720)
-			elif max_y == 1280:
+			elif max_y == 1080:
+				frame_size = (1920, 1080)
+			elif max_x == 1487 and max_y == 1048:
 				frame_size = (1920, 1080)
 			else:
+				print(f"Could not find frame size for {self.video_id}. {max_x}, {max_y}")
+				print(self.video_data.head())
 				pass
 
 		return frame_size
@@ -499,8 +553,8 @@ class VideoTrial:
 
 		# tool specific trial level features
 		for tool in tools:
-			summarized_features_dict['area_covered_total_' + tool] = np.sum(features_df['area_covered_' + tool])
-			summarized_features_dict['path_distances_' + tool] = self.get_tool_path_length(tool)
+			summarized_features_dict['area_covered_total_' + tool] = np.sum(features_df['area_covered_' + tool])/self.number_of_frames()
+			summarized_features_dict['path_distances_' + tool] = self.get_tool_path_length(tool)/self.number_of_frames()
 			summarized_features_dict['proportion_' + tool] = self.get_number_of_frames_with_tool(tool)/self.number_of_frames()
 
 		# add the combination columns (distance from each other)
@@ -516,7 +570,7 @@ class VideoTrial:
 
 				if col_name not in summarized_features_dict:
 					for k_pre in ['overlap_', 'distance_between_']:
-						summarized_features_dict[k_pre + col_name] = np.sum(features_df[k_pre + col_name])
+						summarized_features_dict[k_pre + col_name] = np.sum(features_df[k_pre + col_name])/self.number_of_frames()
 
 		return summarized_features_dict
 
@@ -626,13 +680,18 @@ class IndividualFrame:
 		self,
 		frame_size,
 		frame_data,
-		verbose=False
+		verbose=False,
+		normalize=True
 	):
+		self.normalize = normalize
+		self.verbose = verbose
+		self.frame_size = frame_size
+
 		self.frame_data = frame_data.reset_index()
 		self.frame_name = self.frame_data['file'][0]
+		self.frame_index = self.frame_data['f_index'][0]
 		self.tools = self.get_tools()
-		self.frame_size = frame_size
-		self.verbose = verbose
+
 
 	"""Get the tools in this frame"""
 	def get_tools(self, ignore=[]):
@@ -646,6 +705,14 @@ class IndividualFrame:
 				continue
 
 			x1, y1, x2, y2 = self.frame_data.loc[i,['x1', 'y1', 'x2', 'y2']]
+
+			# normalize to the size of the frame
+			if self.normalize:
+				x1 = x1/self.frame_size[0]
+				y1 = y1/self.frame_size[1]
+				x2 = x2/self.frame_size[0]
+				y2 = y2/self.frame_size[1]
+
 			tools.append(SurgicalTool(
 				tool_name=self.frame_data['class'][i],
 				bbox_coordinates=[x1, y1, x2, y2]
