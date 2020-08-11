@@ -35,19 +35,6 @@ change_in_scores %<>% mutate(SurveyID = factor(SurveyID, levels=ordered_survey_i
 ```
 
 ```{r}
-m <- ggplot(geyser, aes(x = duration, y = waiting)) + geom_point() + xlim(0.5, 6) + ylim(40, 110) 
-m + geom_density2d()
-
-dens <- kde2d(geyser$duration , geyser$waiting, n = 50, lims = c(0.5, 6, 40, 110)) 
-densdf <- data.frame(expand.grid(duration = dens$x , waiting = dens$y), z = as.vector(dens$z))
-
-m + geom_contour(aes(z=z), data=densdf)
-m + geom_density2d() + scale_y_log10() 
-m + geom_density2d() + coord_trans(y="log10")
-m + stat_density2d(aes(fill = ..level..), geom="polygon")
-```
-
-```{r}
 t1_dens_values <- scatter_ebl_tth %>% filter(trial == 1, !is.na(TTH), !is.na(ebl)) %$% kde2d(TTH, ebl)
 t1_densdf <- data.frame(expand.grid(TTH=t1_dens_values$x , ebl=t1_dens_values$y), z=as.vector(t1_dens_values$z))
 
@@ -182,8 +169,36 @@ absolute_change_in_tth <- ggplot(change_in_scores %>% mutate(SurveyID=factor(Sur
 absolute_change_in_tth
 ```
 
-
 ```{r}
+jama_colors <- pal_jama("default")(7)
+trial_2_rank_order <- change_in_scores %>% arrange(TTH_2, -change_in_tth) %$% SurveyID
+absolute_change_in_tth_flipped <- ggplot(change_in_scores %>% mutate(SurveyID=factor(SurveyID, levels=trial_2_rank_order)), aes(color=Group2)) +
+  geom_segment(aes(x = SurveyID, xend=SurveyID, y = TTH_1, yend = TTH_2)) +
+  geom_point(aes(x=SurveyID, y= TTH_1), color = jama_colors[1], alpha=0.75) +
+  geom_point(aes(x=SurveyID, y= TTH_2), color=jama_colors[2], alpha=0.75) +
+  guides(color=guide_legend(title=NULL)) +
+  # scale_linetype_manual(values = c('Training rescue'=1), na.value = 2) +
+  scale_color_manual(values=c('Training rescue'='black', 'MIQ'='black', 'Other'='grey'), breaks=c('Training rescue', 'Other'),na.value='grey') +
+  xlab('Individual ranked by improvement in TTH') +
+  ylab('Time to Hemostasis (sec)') +
+  theme_bw() +
+  theme(
+    legend.position = 'top',
+    legend.justification = 'left',
+    legend.text = element_text(size=12),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.text.y = element_text(size=12),
+    axis.title = element_text(size=12),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank()
+  )
+
+absolute_change_in_tth_flipped
+```
+
+
+```{r eval=FALSE}
 quartile_cutoff <- change_in_scores %$% quantile(change_in_tth, na.rm=T, c(0.75))
 data_top_quartile <- change_in_scores %>% 
   filter(change_in_tth >= quartile_cutoff)
@@ -263,6 +278,10 @@ figure1_miq_performance <- ggpubr::ggarrange(
 )
 
 ggsave(figure1_miq_performance, filename = file.path(plot_dir, 'figure1_miq_performance.png'), width = 8, height = 4, units = 'in')
+```
+
+```{r}
+ggsave(absolute_change_in_tth_flipped, filename = file.path(final_figure_dir, 'supp_absolute_change_in_tth_flipped.tiff'), width = 6, height = 6, units = 'in')
 ```
 
 ```{r}
