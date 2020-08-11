@@ -5,6 +5,7 @@ import re
 import os
 from math import floor
 import time
+import cv2
 
 from lxml import etree
 
@@ -310,3 +311,139 @@ class PostProcessYoloDetectionGenerator(PostProcessYoloGenerator):
         X = self.__data_generation(frame_ids)
 
         return X
+
+
+class ObjectDetectionTemporalGenerator(Sequence):
+    def __init__(
+        self,
+        csv_input_data,
+        csv_labels_data,
+        csv_class_map,
+        shuffle=False,
+        batch_size=8,
+        seq_len=6,
+        img_size=416,
+        n_boxes=5,
+        flatten_bbox_input=True
+    ):
+        self.shuffle = shuffle
+        self.batch_size = batch_size
+        self.seq_len = seq_len
+        self.img_size = img_size
+        self.n_boxes = n_boxes
+        self.flatten_bbox_input = flatten_bbox_input
+
+        # Set up the classes we care about
+        class_map = pd.read_csv(csv_class_map, names=['class', 'ind'])
+        self.class_dict = {}
+        for i in range(class_map.shape[0]):
+            self.class_dict[class_map.at[i, 'class']] = class_map.at[i, 'ind']
+        
+        self.input_data = pd.read_csv(csv_input_data, names=['file', 'score', 'x1', 'y1', 'x2', 'y2', 'class'])
+        self.labels_data = pd.read_csv(csv_labels_data, names=['file', 'x1', 'y1', 'x2', 'y2', 'class'])
+
+        # The ground truth (labels) csv contains all of the images in the dataset
+        self.frame_ids = [i for i in set(self.labels_data['file'])]
+        self.frame_ids.sort() # Easier to manage for when the data is not shuffled
+
+        self.on_epoch_end()
+
+
+    # Shuffle the sequences at the end of an epoch
+    def on_epoch_end(self):
+        self.indexes = np.arange(len(self.frame_ids))
+
+        if self.shuffle:
+            np.random.shuffle(self.indexes)
+
+    def __len__(self):
+        return int(np.floor(len(self.frame_ids) / self.batch_size))
+
+    def __getitem__(self, index):
+        # Generate indexes of the batch
+        indexes = self.indexes[index*self.batch_size:(index+1)*self.batch_size]
+
+        frame_ids = [self.frame_ids[k] for k in indexes]
+
+        # Generate the data
+        X1, X2, y = self.__data_generation(frame_ids)
+        return([X1, X2], y)
+
+    """
+    We have to return:
+        - resize image of input
+        - bounding boxes for this frame and previous n
+        - ground truth labels for this frame
+    """
+    def __data_generation(self, frame_ids):
+        X_img = np.zeros((self.batch_size, self.img_size, self.img_size, 3))
+        X_bboxes = np.zeros((self.batch_size, self.seq_len, self.n_boxes, 6))
+
+        y = np.zeros((self.batch_size, self.n_boxes, 6))
+
+        for i, fid in enumerate(frame_ids):
+            # First we load our image
+            img_array = cv2.cvtColor(cv2.imread(fid), cv2.COLOR_RGB2BGR)
+
+            y[i,] = self.__read_annotations(fid, img_array.shape)
+            
+            # Resize after processing the annotations, because we need the original image size
+            # in order to normalize properly
+            X_img[i,] = cv2.resize(img_array, (self.img_size, self.img_size))/255.0
+
+
+            """
+            Now we make the sequence of bboxes
+
+            (1) Get the frames we need
+            (2) Get the predictions made
+            (3) Combine into sequence
+            """
+            for j, s_fid in enumerate(self.__get_prev_n_fids(fid, self.seq_len)):
+                if s_fid is None:
+                    continue
+
+                X_bboxes[i,j,] = self.__get_predicted_bboxes(s_fid, img_array.shape)
+
+        if self.flatten_bbox_input:
+            X_bboxes = np.reshape(X_bboxes, (self.batch_size, self.seq_len, self.n_boxes*6))
+
+        return X_img, X_bboxes, y
+
+    """Given a frame id, returns a list of the frame plus the previous n"""
+    def __get_prev_n_fids(self, frame_id, nf, zf=8):
+        idn = int(re.sub('(.*_frame_)|(\\.jpeg$)', '', frame_id))
+        return [re.sub('_frame_[0-9]+', '_frame_' + str(i).zfill(zf), frame_id) if i > 0 else None for i in range(idn-nf+1, idn+1)]
+
+    """Get the model predicted bounding boxes"""
+    def __get_predicted_bboxes(self, img, img_size):
+        bboxes_predicted_for_image = self.input_data[self.input_data['file']==img].copy()
+        bboxes_predicted_for_image = bboxes_predicted_for_image[bboxes_predicted_for_image['class'].isin(self.class_dict)]
+        bboxes_predicted_for_image['class'] = [self.class_dict[k] for k in bboxes_predicted_for_image['class']]
+
+        bboxes_as_np = np.zeros((self.n_boxes, 6))
+
+        bboxes_as_np[:bboxes_predicted_for_image.shape[0],:] = np.array(bboxes_predicted_for_image[['score', 'x1', 'y1', 'x2', 'y2', 'class']]).astype(np.float32)
+        bboxes_as_np[:,2] = bboxes_as_np[:, 2]/img_size[0]
+        bboxes_as_np[:,4] = bboxes_as_np[:, 4]/img_size[0]
+        bboxes_as_np[:,1] = bboxes_as_np[:, 1]/img_size[1]
+        bboxes_as_np[:,3] = bboxes_as_np[:, 3]/img_size[1]
+
+        return bboxes_as_np
+
+    """Get the ground truth for this image (and resize)"""
+    def __read_annotations(self, img, img_size):
+        annotations_for_image = self.labels_data[self.labels_data['file']==img].copy()
+        annotations_for_image = annotations_for_image[annotations_for_image['class'].isin(self.class_dict)]
+
+        annotations_for_image['class'] = [self.class_dict[k] for k in annotations_for_image['class']]
+        annotations_for_image['score'] = 1
+        annotations_as_np = np.zeros((self.n_boxes, 6))
+
+        annotations_as_np[:annotations_for_image.shape[0],:] = np.array(annotations_for_image[['score', 'x1', 'y1', 'x2', 'y2', 'class']]).astype(np.float32)
+        annotations_as_np[:,2] = annotations_as_np[:, 2]/img_size[0]
+        annotations_as_np[:,4] = annotations_as_np[:, 4]/img_size[0]
+        annotations_as_np[:,1] = annotations_as_np[:, 1]/img_size[1]
+        annotations_as_np[:,3] = annotations_as_np[:, 3]/img_size[1]
+        
+        return annotations_as_np
