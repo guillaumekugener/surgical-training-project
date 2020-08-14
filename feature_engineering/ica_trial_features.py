@@ -12,6 +12,8 @@ from scipy.stats import (
 	ttest_rel, ttest_ind
 )
 
+FRAME_MAX=100000
+
 """
 ICATrialFeatures
 
@@ -101,15 +103,18 @@ class ICATrialFeatures:
 
 	Each trial in the dataset gets a row with various metrics 
 	calculated for that trial
+
+	n_frames defaults to huge number that should never be less
+	than the total number of frames
 	"""
-	def get_metrics(self, tools=[]):
+	def get_metrics(self, tools=[], n_frames=FRAME_MAX):
 		output_dict = { 'vid': [] }
 
 		# iterate through each video and add its metrics
 		for video in progressbar.progressbar(self.videos):
 			output_dict['vid'].append(video.get_video_id())
 
-			video_metrics = video.summarized_features(tools=tools)
+			video_metrics = video.summarized_features(tools=tools, n_frames=n_frames)
 
 			for k in video_metrics:
 				if k not in output_dict:
@@ -358,10 +363,14 @@ class VideoTrial:
 		return len(self.frames)
 
 	"""Get number of frames with a tool"""
-	def get_number_of_frames_with_tool(self, tool):
-		with_tool = self.video_data[self.video_data['class']==tool]
+	def get_number_of_frames_with_tool(self, tool, n_frames=FRAME_MAX):
 
-		return len(set([i for i in with_tool['file']]))
+		frames_with_tool = 0
+		for f in self.frames[:n_frames]:
+			if f.has_tool(tool):
+				frames_with_tool += 1
+
+		return frames_with_tool
 
 	"""
 	Get tool path
@@ -370,16 +379,13 @@ class VideoTrial:
 	(this happens in one video where there are two cottonoids). For now,
 	we will only deal with their being a single instance of each
 	"""
-	def get_tool_path(self, tool, n=None):
+	def get_tool_path(self, tool, n_frames=FRAME_MAX):
 		positions = []
 
 		for f in self.frames:
 			positions.append(f.get_tool_position(tool))
 
-		if n is not None:
-			positions = positions[:n]
-
-		return positions
+		return positions[:n_frames]
 
 	"""
 	Get tool path length
@@ -390,8 +396,8 @@ class VideoTrial:
 	from the edge to the path (although it could get
 	removed due to redout so this is tricky...)
 	"""
-	def get_tool_path_length(self, tool, n=None, assume_off_screen=False):
-		tool_path = self.get_tool_path(tool, n=n)
+	def get_tool_path_length(self, tool, n_frames=FRAME_MAX, assume_off_screen=False):
+		tool_path = self.get_tool_path(tool, n_frames=n_frames)
 
 		total_distance = 0
 		for pi in range(1, len(tool_path)):
@@ -426,8 +432,8 @@ class VideoTrial:
 
 	Right velocity is None unless both points are defined
 	"""
-	def get_tool_velocities(self, tool, window_size=2):
-		tool_path = self.get_tool_path(tool)
+	def get_tool_velocities(self, tool, window_size=2, n_frames=FRAME_MAX):
+		tool_path = self.get_tool_path(tool, n_frames=n_frames)
 
 		velocities = [None]
 		for pi in range(1, len(tool_path)):
@@ -449,12 +455,10 @@ class VideoTrial:
 	"""
 	Get area covered by tool
 	"""
-	def get_area_covered_by_tool(self, tool, n=None):
+	def get_area_covered_by_tool(self, tool, n_frames=FRAME_MAX):
 		area_covered = []
 
-		frames = self.frames[:]
-		if n is not None:
-			frames = frames[:n]
+		frames = self.frames[:n_frames]
 
 		for f in frames:
 			relevant_tools = f.get_specific_tool(tool)
@@ -470,12 +474,9 @@ class VideoTrial:
 	"""
 	Get tool overlap
 	"""
-	def get_tool_overlap(self, t1, t2, n=None):
+	def get_tool_overlap(self, t1, t2, n_frames=FRAME_MAX):
 		overlap = []
-		frames = self.frames[:]
-
-		if n is not None:
-			frames = frames[:n]
+		frames = self.frames[:n_frames]
 
 		for f in frames:
 			overlap.append(f.get_tool_overlap(t1, t2))
@@ -485,12 +486,9 @@ class VideoTrial:
 	"""
 	Get distances between tools
 	"""
-	def get_distance_between_tools(self, t1, t2, n=None):
+	def get_distance_between_tools(self, t1, t2, n_frames=FRAME_MAX):
 		distance = []
-		frames = self.frames[:]
-
-		if n is not None:
-			frames = frames[:n]
+		frames = self.frames[:n_frames]
 
 		for f in frames:
 			distance.append(f.get_distance_between_tools(t1, t2))
@@ -502,16 +500,16 @@ class VideoTrial:
 
 	Returns a frame x feature matrix for this video
 	"""
-	def full_feature_matrix(self, tools=[]):
+	def full_feature_matrix(self, tools=[], n_frames=FRAME_MAX):
 		features_dict = {}
 
-		features_dict['n_tools_in_view'] = [len([t for t in f.get_tools() if t.get_type() in tools]) for f in self.frames]
+		features_dict['n_tools_in_view'] = [len([t for t in f.get_tools() if t.get_type() in tools]) for f in self.frames[:n_frames]]
 
 		# Single tool features
 		for tool in tools:
-			features_dict['position_' + tool] = self.get_tool_path(tool)
-			features_dict['area_covered_' + tool] = self.get_area_covered_by_tool(tool)
-			features_dict['velocity_' + tool] = self.get_tool_velocities(tool)
+			features_dict['position_' + tool] = self.get_tool_path(tool, n_frames=n_frames)
+			features_dict['area_covered_' + tool] = self.get_area_covered_by_tool(tool, n_frames=n_frames)
+			features_dict['velocity_' + tool] = self.get_tool_velocities(tool, n_frames=n_frames)
 
 		# Combination tool features
 		for t1 in tools:
@@ -525,8 +523,8 @@ class VideoTrial:
 				col_name = '_'.join(col_name)
 
 				if col_name not in features_dict:
-					features_dict['overlap_' + col_name] = self.get_tool_overlap(t1, t2)
-					features_dict['distance_between_' + col_name] = self.get_distance_between_tools(t1, t2)
+					features_dict['overlap_' + col_name] = self.get_tool_overlap(t1, t2, n_frames=n_frames)
+					features_dict['distance_between_' + col_name] = self.get_distance_between_tools(t1, t2, n_frames=n_frames)
 
 		return pd.DataFrame(features_dict)
 
@@ -540,23 +538,26 @@ class VideoTrial:
 	- distance covered by each tool
 	- proportion frames where each tool is present
 	"""
-	def summarized_features(self, tools=[]):
+	def summarized_features(self, tools=[], n_frames=FRAME_MAX):
+		if n_frames == FRAME_MAX:
+			n_frames = self.number_of_frames()
+
 		summarized_features_dict = {}
-		features_df = self.full_feature_matrix(tools=tools)
+		features_df = self.full_feature_matrix(tools=tools, n_frames=n_frames)
 
 		# number of tools in view
-		summarized_features_dict['frames'] = self.number_of_frames()
+		summarized_features_dict['frames'] = n_frames
 		n_tool_ranges = [0, 1, 2, 3, 4]
 		for j in n_tool_ranges:
-			summarized_features_dict['proportion_' + str(j) + '_tools_in_view'] = len([i for i in features_df['n_tools_in_view'] if i == j])/self.number_of_frames()
-		summarized_features_dict['proportion_' + str(n_tool_ranges[-1]+1) + '+_tools_in_view'] = len([i for i in features_df['n_tools_in_view'] if i > j])/self.number_of_frames()
+			summarized_features_dict['proportion_' + str(j) + '_tools_in_view'] = len([i for i in features_df['n_tools_in_view'] if i == j])/n_frames
+		summarized_features_dict['proportion_' + str(n_tool_ranges[-1]+1) + '+_tools_in_view'] = len([i for i in features_df['n_tools_in_view'] if i > j])/n_frames
 
 		# tool specific trial level features
 		for tool in tools:
-			summarized_features_dict['area_covered_total_' + tool] = np.sum(features_df['area_covered_' + tool])/self.number_of_frames()
-			summarized_features_dict['path_distances_' + tool] = self.get_tool_path_length(tool)/self.number_of_frames()
-			summarized_features_dict['proportion_' + tool] = self.get_number_of_frames_with_tool(tool)/self.number_of_frames()
-
+			summarized_features_dict['area_covered_total_' + tool] = np.sum(features_df['area_covered_' + tool])/n_frames
+			summarized_features_dict['path_distances_' + tool] = self.get_tool_path_length(tool, n_frames=n_frames)/n_frames
+			summarized_features_dict['proportion_' + tool] = self.get_number_of_frames_with_tool(tool, n_frames=n_frames)/n_frames
+		
 		# add the combination columns (distance from each other)
 		for t1 in tools:
 			for t2 in tools:
@@ -570,7 +571,7 @@ class VideoTrial:
 
 				if col_name not in summarized_features_dict:
 					for k_pre in ['overlap_', 'distance_between_']:
-						summarized_features_dict[k_pre + col_name] = np.sum(features_df[k_pre + col_name])/self.number_of_frames()
+						summarized_features_dict[k_pre + col_name] = np.sum(features_df[k_pre + col_name])/n_frames
 
 		return summarized_features_dict
 
@@ -582,16 +583,12 @@ class VideoTrial:
 	def plot_tool_positions(
 		self, 
 		tools=[],
-		n_frames=None
+		n_frames=FRAME_MAX
 	):
 		# We have to get the plot data
 		positions_dict = { 'x': [], 'y': [], 'class': []}
 		for tool in tools:
-			positions = self.get_tool_path(tool)
-
-			# If we want to only plot data for the first n frames
-			if n_frames is not None:
-				positions = positions[:n_frames]
+			positions = self.get_tool_path(tool, n_frames=n_frames)
 
 			positions_dict['x'] += [i[0] for i in positions]
 			positions_dict['y'] += [i[1] for i in positions]
@@ -649,21 +646,18 @@ class VideoTrial:
 	"""
 	Plot tool positions as heatmap
 	"""
-	def plot_tool_heatmap(self, tool):
+	def plot_tool_heatmap(self, tool, n_frames=FRAME_MAX):
 		tool_heatmap = np.zeros((self.frame_size[1], self.frame_size[0]))
-		for f in self.frames:
+		for f in self.frames[:n_frames]:
 			tool_heatmap += f.get_tool_bbox_binary(tool)
 
 		plt.imshow(tool_heatmap, cmap='hot', interpolation='nearest')
 		plt.show()
 
 	"""Get n tools in view across frames"""
-	def get_n_tools_in_view(self, ignore=[], n=None):
+	def get_n_tools_in_view(self, ignore=[], n_frames=FRAME_MAX):
 		n_tools_in_view = []
-		frames = self.frames[:]
-
-		if n is not None:
-			frames = frames[:n]
+		frames = self.frames[:n_frames]
 
 		for f in frames:
 			n_tools_in_view.append(len(f.get_tools(ignore=ignore)))
@@ -696,6 +690,7 @@ class IndividualFrame:
 	"""Get the tools in this frame"""
 	def get_tools(self, ignore=[]):
 		tools = []
+		self.tools_present = {}
 
 		if len(ignore) > 0:
 			ignore = set(ignore)
@@ -718,7 +713,13 @@ class IndividualFrame:
 				bbox_coordinates=[x1, y1, x2, y2]
 			))
 
+			self.tools_present[self.frame_data['class'][i]] = True
+
 		return tools
+
+	"""Return whether or not this frame has a particular tool class"""
+	def has_tool(self, tool):
+		return tool in self.tools_present
 
 	"""Get position of tools"""
 	def get_tool_position(self, tool):
