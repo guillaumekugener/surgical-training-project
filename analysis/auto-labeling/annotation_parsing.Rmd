@@ -1,0 +1,33 @@
+---
+title: "Annotation parsing"
+author: "Guillaume Kugener"
+date: "12/13/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(XML)
+library(xml2)
+```
+
+```{r}
+annotations_xml <- xmlParse("~/Downloads/git_annotation_2019_12_05_06_06_46.dump")
+annotations_xml
+annotations_xml_data <- xmlToList(annotations_xml)
+```
+
+```{r}
+annotations_xml <- read_xml("~/Downloads/git_annotation_2019_12_05_06_06_46.dump")
+
+annotated_images <- annotations_xml %>% xml_find_all("//image")
+
+# annotated_images %>% xml2::xml_attr(attr = 'name')
+```
+
+```{r}
+```

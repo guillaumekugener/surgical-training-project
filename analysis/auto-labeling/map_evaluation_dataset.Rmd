@@ -1,0 +1,357 @@
+---
+title: "mAP Evaluation Surgical Dataset"
+author: "Guillaume Kugener"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, include=FALSE)
+library(tidyverse)
+library(magrittr)
+library(data.table)
+library(ggrepel)
+```
+
+# Surgical Auto-Annotation Evaluation
+
+```{r}
+auto_plot_dir <- '~/Documents/USC/USC_docs/ml/surgical-training-project/data/auto-label/plots'
+```
+
+This document serves to generate a report to determine metrics after our auto-annotator model has been run. It generates precision vs. recall curves and calculates a mean average precision score (mAP) on different subsets of the data
+
+## Metrics overview
+
+* Precision: a measurement of how confident we can be that a positive is a true positive. A precision of 1 means that every object detected by the model corresponds to a true object in the image.
+* Recall: measurement for the model's ability to find all of the existing objects in a set. A recall of 1 means that the model was able to find every single object in our dataset
+* mAP: the mean average precision of the model. This is a standard metric used to evaluate object detection models. We find the precision of the model at particular recall values (the standard is at 11 intervals 0, 0.1, 0.2, ..., 1) and then take the mean precision across those intervals. mAP will be between 0 and 1. 
+
+In this report, we will plot precision vs. recall curves with the mAP annotated on the bottom for the different models that have been evaluated.
+
+I think a good paper to compare these results to would be this one: https://arxiv.org/abs/1802.08774. I think the overall outline of this paper is very similar to what we are doing. They report these metrics as well in their results, although they do not show the overall curves as I do here
+
+```{r}
+classes_of_interest <- c('suction', 'grasper', 'cottonoid', 'muscle')
+gt_results <- read_csv(
+  '~/Documents/USC/USC_docs/ml/datasets/fps-1-uncropped/ImageSets/Main/retinanet_surgical_1fps_validation.csv',
+  col_names = FALSE
+) %>% magrittr::set_colnames(c('file', 'x1', 'y1', 'x2', 'y2', 'class')) %>%
+  filter(class %in% classes_of_interest)
+yolo_results <- read_csv('~/Documents/USC/USC_docs/ml/surgical-training-project/data/validation_yolo_pred_retina_style.csv')
+retianet_results <- read_csv('~/Documents/USC/USC_docs/ml/surgical-training-project/data/validation_retinanet_pred_retina_style.csv')
+```
+
+```{r}
+# A bunch of helper functions
+prep_for_precision_recall_curve <- function(df, total_positives) {
+  precision_recall <- df %>%
+    arrange(-score) %>%
+    mutate(
+      ACC_TP = cumsum(TP),
+      ACC_FP = cumsum(FP)
+    ) %>%
+    mutate(
+      precision = ACC_TP / (ACC_TP + ACC_FP),
+      recall = ACC_TP / total_positives
+    )
+  
+  return(precision_recall)
+}
+
+calculate_ap <- function(df) {
+  df %<>% dplyr::select(recall, precision)
+  blank_ap <- data.frame(
+    recall=seq(0,1, 0.1),
+    precision=rep(0, 11)
+  )
+  
+  df %<>% rbind(blank_ap %>% filter(recall > max(df$recall)))
+  eleven_points = c()
+  current_threshold = 0
+  for (i in seq(1, nrow(df))) {
+    recall = df$recall[i]
+    if (recall >= current_threshold) {
+      eleven_points <- c(eleven_points, df$precision[i])
+      current_threshold <- current_threshold + 0.1
+    }
+  }
+  
+  return(eleven_points)
+}
+
+compute_multiple_ious <- function(df, total_positives, mean_iou_threshold=seq(0.5, 0.95, 0.05)) {
+  # For training
+  all_ious <- NULL
+  maps_all <- NULL
+  for (iou_threshold in mean_iou_threshold) {
+    prepped_prc <- prep_for_precision_recall_curve(
+      df = df %>%
+        # Not sure if you filter out or change the previous ones to FP...
+        mutate(TP=ifelse(IOU > iou_threshold, TP, 0)) %>%
+        mutate(FP=ifelse(IOU > iou_threshold, 0, 1)),
+        # filter((IOU > iou_threshold & TP == 1) | FP == 1),
+      total_positives = total_positives
+    )
+    
+    all_ious %<>% rbind(prepped_prc %>% dplyr::select(recall, precision) %>% mutate(iou=iou_threshold))
+    maps_all %<>% rbind(data.frame(iou=iou_threshold, map=mean(calculate_ap(prepped_prc)), stringsAsFactors = F))
+  }
+  
+  return(list(df=all_ious, maps=maps_all))
+}
+```
+
+```{r}
+validation_trials_ids <- yolo_results %$%
+  frame %>%
+  stringr::str_extract(string=., pattern='S[0-9]+T[0-9]+[a-z]?') %>%
+  unique()
+```
+
+## Validation set precision recall
+
+Below is the precision recall on our validation dataset of `r length(validation_trials_ids)` trials. These trials are:
+
+`r  paste(validation_trials_ids, collapse=', ')`
+
+```{r}
+ds_list <- list(
+  'yolo'=yolo_results,
+  'retinanet'=retianet_results
+)
+```
+
+### Overall
+
+```{r}
+validation_overall_results <- NULL
+validation_overall_map <- NULL
+
+for (ds in names(ds_list)) {
+  total_positives <- gt_results %>%
+    filter(class != '') %>%
+    nrow()
+  m_results <- ds_list[[ds]] %>%
+    dplyr::rename(TP=tp, FP=fp) %>%
+    prep_for_precision_recall_curve(., total_positives = total_positives)
+      
+  map = mean(calculate_ap(m_results))
+    
+  validation_overall_results %<>% rbind(m_results %>% 
+      mutate(model=ds))
+  validation_overall_map %<>% rbind(data.frame(map=map, model=ds, stringsAsFactors=FALSE) %>%
+    mutate(x=max(validation_overall_results$recall), y=min(validation_overall_results$precision)))
+}
+```
+
+```{r include=TRUE}
+ggplot(validation_overall_results, aes(recall, precision, color=model)) +
+  geom_line() +
+  geom_text_repel(data=validation_overall_map, aes(x, y, label=paste0('mAP: ', round(map, 3)))) +
+  scale_x_continuous(limits=c(0,1)) +
+  scale_y_continuous(limits=c(0,1))
+```
+
+### By tool
+
+```{r validation}
+validation_results <- NULL
+validation_maps <- NULL
+
+for (ds in names(ds_list)) {
+  for (to in c('suction', 'grasper', 'muscle', 'cottonoid')) {
+    total_positives <- gt_results %>%
+      filter(class == to) %>%
+      nrow()
+    m_t_results <- ds_list[[ds]] %>%
+      filter(class==to) %>%
+      dplyr::rename(TP=tp, FP=fp) %>%
+      prep_for_precision_recall_curve(., total_positives = total_positives)
+      
+    map = mean(calculate_ap(m_t_results))
+    
+    validation_results %<>% rbind(m_t_results %>% 
+        mutate(tool=to, model=ds))
+    validation_maps %<>% rbind(data.frame(map=map, class=to, model=ds, stringsAsFactors=FALSE) %>%
+      mutate(x=max(validation_results$recall), y=min(validation_results$precision)))
+  }
+}
+```
+
+```{r include=TRUE}
+ggplot(validation_results, aes(recall, precision, color=model)) +
+  geom_line() +
+  geom_text_repel(data=validation_maps, aes(x, y, label=paste0('mAP: ', round(map, 3)))) +
+  facet_wrap(~class) +
+  scale_x_continuous(limits=c(0,1)) +
+  scale_y_continuous(limits=c(0,1))
+```
+
+### By video
+
+```{r}
+video_validation_results <- NULL
+video_validation_maps <- NULL
+
+for (ds in names(ds_list)) {
+  videos_in_set <- ds_list[[ds]] %>% 
+    mutate(vid=stringr::str_extract(string=frame, pattern='S[0-9]+T[0-9]+[A-Z]?')) %$%
+    unique(vid)
+  
+  for (vid in videos_in_set) {
+    total_positives <- gt_results %>%
+      filter(class != '', stringr::str_extract(string=file, pattern='S[0-9]+T[0-9]+[A-Z]?') == vid) %>%
+      nrow()
+    
+    m_v_results <- ds_list[[ds]] %>%
+      filter(stringr::str_extract(string=frame, pattern='S[0-9]+T[0-9]+[A-Z]?') == vid) %>%
+      dplyr::rename(TP=tp, FP=fp) %>%
+      prep_for_precision_recall_curve(., total_positives = total_positives)
+      
+    map = mean(calculate_ap(m_v_results))
+    
+    video_validation_results %<>% rbind(m_v_results %>% 
+        mutate(vid=vid, model=ds))
+    video_validation_maps %<>% rbind(data.frame(map=map, vid=vid, model=ds, stringsAsFactors=FALSE) %>%
+      mutate(x=max(video_validation_results$recall), y=min(video_validation_results$precision)))
+  }
+}
+```
+
+```{r include=TRUE, fig.height=6, fig.width=6}
+ggplot(video_validation_results, aes(recall, precision, color=model)) +
+  geom_line() +
+  geom_text_repel(data=video_validation_maps, aes(x, y, label=paste0('mAP: ', round(map, 3)))) +
+  facet_wrap(~vid) +
+  scale_x_continuous(limits=c(0,1)) +
+  scale_y_continuous(limits=c(0,1))
+```
+
+## Evaluation on 30 fps data
+
+```{r}
+fps_30_gt_results <- read_csv(
+  '~/Documents/USC/USC_docs/ml/datasets/fps-30-uncropped/ImageSets/Main/local_retinanet_style.csv',
+  col_names = FALSE
+) %>% magrittr::set_colnames(c('file', 'x1', 'y1', 'x2', 'y2', 'class')) %>%
+  filter(class %in% classes_of_interest)
+fps_30_retinanet_results <- read_csv('~/Documents/USC/USC_docs/ml/surgical-training-project/data/fps30_retinanet_pred_retina_style.csv')
+```
+
+```{r}
+fps_30_ds_list <- list(
+  'retinanet'=fps_30_retinanet_results
+)
+```
+
+We generated annotations for 4 trials at 30 fps. Using the models trained on 1 fps data, we predicted bounding boxes in this 30 fps data. Below are the results
+
+
+### Overall
+
+```{r}
+fps_30_overall_results <- NULL
+fps_30_overall_map <- NULL
+
+for (ds in names(fps_30_ds_list)) {
+  total_positives <- fps_30_gt_results %>%
+    filter(class != '') %>%
+    nrow()
+  m_results <- fps_30_ds_list[[ds]] %>%
+    dplyr::rename(TP=tp, FP=fp) %>%
+    prep_for_precision_recall_curve(., total_positives = total_positives)
+      
+  map = mean(calculate_ap(m_results))
+    
+  fps_30_overall_results %<>% rbind(m_results %>% 
+      mutate(model=ds))
+  fps_30_overall_map %<>% rbind(data.frame(map=map, model=ds, stringsAsFactors=FALSE) %>%
+    mutate(x=max(fps_30_overall_results$recall), y=min(fps_30_overall_results$precision)))
+}
+```
+
+```{r include=TRUE}
+ggplot(fps_30_overall_results, aes(recall, precision, color=model)) +
+  geom_line() +
+  geom_text_repel(data=fps_30_overall_map, aes(x, y, label=paste0('mAP: ', round(map, 3)))) +
+  scale_x_continuous(limits=c(0,1)) +
+  scale_y_continuous(limits=c(0,1))
+```
+
+### By tool
+
+```{r validation}
+fps_30_results <- NULL
+fps_30_maps <- NULL
+
+for (ds in names(fps_30_ds_list)) {
+  for (to in c('suction', 'grasper', 'muscle', 'cottonoid')) {
+    total_positives <- fps_30_gt_results %>%
+      filter(class == to) %>%
+      nrow()
+    m_t_results <- fps_30_ds_list[[ds]] %>%
+      filter(class==to) %>%
+      dplyr::rename(TP=tp, FP=fp) %>%
+      prep_for_precision_recall_curve(., total_positives = total_positives)
+      
+    map = mean(calculate_ap(m_t_results))
+    
+    fps_30_results %<>% rbind(m_t_results %>% 
+        mutate(tool=to, model=ds))
+    fps_30_maps %<>% rbind(data.frame(map=map, class=to, model=ds, stringsAsFactors=FALSE) %>%
+      mutate(x=max(fps_30_results$recall), y=min(fps_30_results$precision)))
+  }
+}
+```
+
+```{r include=TRUE}
+ggplot(fps_30_results, aes(recall, precision, color=model)) +
+  geom_line() +
+  geom_text_repel(data=fps_30_maps, aes(x, y, label=paste0('mAP: ', round(map, 3)))) +
+  facet_wrap(~class) +
+  scale_x_continuous(limits=c(0,1)) +
+  scale_y_continuous(limits=c(0,1))
+```
+
+### By video
+
+```{r}
+video_fps_30_results <- NULL
+video_fps_30_maps <- NULL
+
+for (ds in names(fps_30_ds_list)) {
+  videos_in_set <- fps_30_ds_list[[ds]] %>% 
+    mutate(vid=stringr::str_extract(string=frame, pattern='S[0-9]+T[0-9]+[A-Z]?')) %$%
+    unique(vid)
+  
+  for (vid in videos_in_set) {
+    total_positives <- fps_30_gt_results %>%
+      filter(class != '', stringr::str_extract(string=file, pattern='S[0-9]+T[0-9]+[A-Z]?') == vid) %>%
+      nrow()
+    
+    m_v_results <- fps_30_ds_list[[ds]] %>%
+      filter(stringr::str_extract(string=frame, pattern='S[0-9]+T[0-9]+[A-Z]?') == vid) %>%
+      dplyr::rename(TP=tp, FP=fp) %>%
+      prep_for_precision_recall_curve(., total_positives = total_positives)
+      
+    map = mean(calculate_ap(m_v_results))
+    
+    video_fps_30_results %<>% rbind(m_v_results %>% 
+        mutate(vid=vid, model=ds))
+    video_fps_30_maps %<>% rbind(data.frame(map=map, vid=vid, model=ds, stringsAsFactors=FALSE) %>%
+      mutate(x=max(video_fps_30_results$recall), y=min(video_fps_30_results$precision)))
+  }
+}
+```
+
+```{r include=TRUE, fig.height=6, fig.width=6}
+ggplot(video_fps_30_results, aes(recall, precision, color=model)) +
+  geom_line() +
+  geom_text_repel(data=video_fps_30_maps, aes(x, y, label=paste0('mAP: ', round(map, 3)))) +
+  facet_wrap(~vid) +
+  scale_x_continuous(limits=c(0,1)) +
+  scale_y_continuous(limits=c(0,1))
+```
+
+
