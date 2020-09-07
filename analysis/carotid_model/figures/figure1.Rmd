@@ -274,7 +274,7 @@ miq_box_plot
 
 ```{r}
 figure1_miq_performance <- ggpubr::ggarrange(
-  absolute_change_in_tth, miq_box_plot, labels = c('b', 'c'), nrow = 1
+  absolute_change_in_tth, miq_box_plot, labels = c('B', 'C'), nrow = 1
 )
 
 ggsave(figure1_miq_performance, filename = file.path(plot_dir, 'figure1_miq_performance.png'), width = 8, height = 4, units = 'in')
@@ -288,7 +288,7 @@ ggsave(absolute_change_in_tth_flipped, filename = file.path(final_figure_dir, 's
 # Final figure 1
 final_figure1 <- ggpubr::ggarrange(
   figure_1_density, 
-  figure1_miq_performance, labels = c('a', ''),
+  figure1_miq_performance, labels = c('A', ''),
   nrow = 2, ncol = 1, heights = c(1.5, 1))
 
 ggsave(final_figure1, filename = file.path(final_figure_dir, 'figure1.png'), width = 8, height = 10, units='in')
