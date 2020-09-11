@@ -102,7 +102,7 @@ post_confidence_trial_2 <- ggplot(plotting_data_ebl_conf %>% filter(trial =='Tri
 
 ```{r}
 confidence_ebl_plots <- ggpubr::ggarrange(
-  pre_conf_trial_1, post_confidence_trial_2, ncol = 2, labels = c('a', 'b'),
+  pre_conf_trial_1, post_confidence_trial_2, ncol = 2, labels = c('A', 'B'),
   common.legend = TRUE, legend = c('bottom')
 )
 ```
@@ -255,7 +255,7 @@ peak_heart_rate_plot <- ggplot(complete_heart_rate_data %>% filter(value_type=='
 figure2 <- ggpubr::ggarrange(
   confidence_ebl_plots,
   ggpubr::ggarrange(
-    average_heart_rate_plot, peak_heart_rate_plot, ncol=2, labels = c('c', 'd')
+    average_heart_rate_plot, peak_heart_rate_plot, ncol=2, labels = c('C', 'D')
   ), nrow = 2
 )
 

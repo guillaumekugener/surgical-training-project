@@ -42,15 +42,55 @@ class SurgicalVideoAnnotation():
         zf = zipfile.ZipFile(file_path, 'r')
         
         # Get the relevant json file
-        self.images = [i for i in zf.namelist() if re.search('vott\\-json\\-export/.*jpeg$', i)]
-        self.annotations_json = [i for i in zf.namelist() if re.search('vott\\-json\\-export/.*\\.json$', i)][0]
+        # Not all annotaters used the JSON format (some export in the PASCAL format)
+        self.annotation_format = 'vott-json'
+        if len([i for i in zf.namelist() if re.search('PascalVOC\\-export', i)]) > 0:
+            self.annotation_format = 'PASCAL'
+            self.images = [i for i in zf.namelist() if re.search('.*PascalVOC\\-export/JPEGImages/.*jpeg$', i)]
+            self.annotations = [i for i in zf.namelist() if re.search('.*PascalVOC\\-export/Annotations/.*xml$', i)]
+        else:
+            self.images = [i for i in zf.namelist() if re.search('vott\\-json\\-export/.*jpeg$', i)]
+            annotation_jsons = [i for i in zf.namelist() if re.search('vott\\-json\\-export/.*\\.json$', i)]
+            
+            # the export was not done as intructed or there was a problem in the export
+            if len(annotation_jsons) == 0 or self.trial_id == 'S303T1':
+                annotation_jsons = []
+                zf.close()
+                zf = zipfile.ZipFile(file_path, 'a')
+
+                # the export did not include it, so we have to put the annotations together manually
+                assets = [i for i in zf.namelist() if re.search('asset\\.json$', i)]
+                data = {}
+                json_data_name = 'vott-json-export/' + self.trial_id + '-export.json'
+                for a in assets:
+                    af = zf.open(os.path.join(a))
+                    data[a] = json.load(af)
+                    # print(data[a]['asset']['name'])
+
+                with open('data.json', 'w') as f:
+                    json.dump({ 'assets': data } , f)
+                
+                zf.write('data.json', json_data_name)
+                # os.remove('data.json')
+                annotation_jsons.append(json_data_name)
+                zf.close()
+
+                zf = zipfile.ZipFile(file_path, 'r')
+
+            self.annotations_json = annotation_jsons[0]
+
         self.frame_objects = []
 
         zf.extractall() # It's in current directory
 
         # Parse the annotations
         self.create_directory()
-        self.parse_annotations()
+        if self.annotation_format == 'PASCAL':
+            # just need to move them to their destination
+            self.move_annotations_xmls()    
+        else:
+            # have to parse the JSON
+            self.parse_annotations()
 
         # Copy the images from the annotations as well, if desired
         if not annotations_only:
@@ -58,11 +98,11 @@ class SurgicalVideoAnnotation():
 
         # Remove the driectory that we created
         if delete_at_end:
-            for f in zf.namelist():
+            for f in zf.namelist() + ['_MACOSX', 'vott-json-export']:
                 if not os.path.exists(f):
                     continue
 
-                # Delete theme
+                # Delete them
                 if os.path.isdir(f):
                     shutil.rmtree(f)
                 else:
@@ -82,7 +122,6 @@ class SurgicalVideoAnnotation():
                 os.mkdir(dir_to_make)
             except:
                 pass
-
 
     def parse_annotations(self):
         f = open(self.annotations_json)
@@ -221,6 +260,113 @@ class SurgicalVideoAnnotation():
 
         f.close()
 
+    def move_annotations_xmls(self):
+        # Grab all of the annotation files and move them after reformating them
+        img_size = [-1, -1]
+        processed = []
+        for f in self.annotations:
+            file_dest = os.path.join(self.output_directory, 'Annotations', re.sub('.*/', '', f))
+            # Remove the file if it already exists
+            if os.path.exists(file_dest):
+                os.remove(file_dest)
+            shutil.move(f, file_dest)
+
+            # Also edit them (so they have integer values)
+            # and pull out the stats
+            root = etree.parse(file_dest)
+            if img_size[0] == -1:
+                for ele in root.iter('width'):
+                    img_size[0] = int(ele.text)
+                for ele in root.iter('height'):
+                    img_size[1] = int(ele.text)
+
+            # Have to round all of the values
+            for tag in ['xmin', 'ymin']:
+                for ele in root.iter(tag):
+                    ele.text = str(floor(float(ele.text)))
+
+            for ele in root.iter('xmax'):
+                ele.text = str(floor(min(img_size[0], ceil(float(ele.text)))))
+            for ele in root.iter('ymax'):
+                ele.text = str(floor(min(img_size[1], ceil(float(ele.text)))))
+
+            # Now check if there are any problems with the tags. If there
+            # are, we will have to manually fix them
+            # TODO: not sure how these errors appear as of yet, so will
+            # handle if I see them
+            myfile = open(file_dest, "wb")
+            myfile.write(etree.tostring(root, pretty_print=True))
+            myfile.close()
+
+            root = etree.parse(file_dest)
+            fname = ''
+            for fn in root.iter('filename'):
+                fname = fn.text
+
+            no_objects=True
+            for o in root.iter('object'):
+                no_objects=False
+                d = {}
+                for ele in o.iter('bndbox'):
+                    for tag in ['xmin', 'ymin', 'xmax', 'ymax']:
+                        for e2 in ele.iter(tag):
+                            d[tag] = int(e2.text)
+
+                for cl in o.iter('name'):
+                    d['class'] = cl.text
+
+                # Now add the object
+                self.frame_objects.append({
+                    'name': fname,
+                    'x1': d['xmin'],
+                    'y1': d['ymin'],
+                    'x2': d['xmax'],
+                    'y2': d['ymax'],
+                    'class': d['class']
+                })
+
+            # There were no object in this frame
+            if no_objects:
+                self.frame_objects.append({
+                    'name': fname,
+                    'x1': '',
+                    'y1': '',
+                    'x2': '',
+                    'y2': '',
+                    'class': ''
+                })
+
+            processed.append(fname)
+
+        # If there are any images that were not processed,
+        # add them as blank now
+        self.missing_frames = [re.sub('.*/', '', i) for i in self.images if re.sub('.*/', '', i) not in processed]
+
+        if self.assume_missing_empty:
+            for ef in self.missing_frames:
+                fo = {
+                    'name': ef,
+                    'height': img_size[1],
+                    'width': img_size[0],
+                    'tools': []
+                }
+
+                # Add this to our frame objects array
+                self.frame_objects.append({
+                    'name': ef,
+                    'x1': '',
+                    'y1': '',
+                    'x2': '',
+                    'y2': '',
+                    'class': ''
+                })
+
+                # Now generate the annotations file
+                self.generate_frame_annotation_xml(
+                    frame_obj=fo,
+                    destination=os.path.join(self.output_directory, 'Annotations')
+                )
+
     def move_images(self):
         # Grab all of the image files and move them
         for f in self.images:
@@ -349,3 +495,174 @@ def create_retinanet_csv(all_objects_ds_df, dir_prefix, final_dataset_directory,
         os.path.join(final_dataset_directory, 'ImageSets/Main', csv_name + '_validation.csv'),
         sep=',', header=False, index=False
     )
+
+"""This trial was misnamed, so this function fixes the file names"""
+def fix_S810T1b(
+    image_dir,
+    annotations_dir,
+    complete_set_df
+):
+    # Fix the image names
+    # Fix the annotation file names
+    # Fix the image file names in the xml (of the annotations) and path
+    relevant_images = [f for f in os.listdir(image_dir) if re.search('S810Tb', f)]
+    relevant_annotation_files = [f for f in os.listdir(annotations_dir) if re.search('S810Tb', f)]
+
+    for f in relevant_images:
+        os.rename(os.path.join(image_dir, f), os.path.join(image_dir, re.sub('S810Tb', 'S810T1b', f)))
+
+    for f in relevant_annotation_files:
+        # Now fix the names and then rename the file
+        old_file = os.path.join(annotations_dir, f)
+        root = etree.parse(old_file)
+
+        for tag in ['path', 'filename']:
+            for ele in root.iter(tag):
+                ele.text = re.sub('S810Tb', 'S810T1b', ele.text)
+
+        myfile = open(old_file, "wb")
+        myfile.write(etree.tostring(root, pretty_print=True))
+        os.rename(old_file, os.path.join(annotations_dir, re.sub('S810Tb', 'S810T1b', f)))
+
+    # Fix the data frame with all of the data points
+    old_name = complete_set_df[complete_set_df['name'].str.contains('S810Tb')]['name'].unique()
+    new_name = complete_set_df[complete_set_df['name'].str.contains('S810T1b')]['name'].unique()
+
+    to_remove = [i for i in new_name if re.sub('S810T1b', 'S810Tb', i) in old_name]
+    complete_set_df = complete_set_df[~complete_set_df['name'].isin(to_remove)].reset_index(drop=True)
+
+    # Now fix all the names
+    complete_set_df['name'] = [re.sub('S810Tb_frame', 'S810T1b_frame', i) for i in complete_set_df['name']]
+    return complete_set_df.reset_index(drop=True)
+
+"""Adds missing muscle patches for a set of annotations"""
+def add_missing_muscle(
+    muscle_annotations_path,
+    image_dir,
+    annotations_dir,
+    complete_set_df
+):
+    # Need to add the muscle patches detected in the muscle annotations path
+    # to the xmls and to the data frame
+    muscle_patch_zips = [i for i in os.listdir(muscle_annotations_path) if re.search('\\.zip$', i)]
+
+    assets_dict = {}
+    for z in muscle_patch_zips:
+        trial_id = re.search('S[0-9]+T[0-9]+[a-z]?', z).group(0)
+
+        zf = zipfile.ZipFile(os.path.join(muscle_annotations_path, z), 'r')
+        assets = [i for i in zf.namelist() if re.search('asset\\.json$', i) and re.search('^' + trial_id, i)]
+
+        for a in assets:
+            af = zf.open(a)
+            assets_dict[a] = json.load(af)
+
+            af.close()
+        zf.close()
+
+    data = { 'assets': assets_dict }
+
+    # Has all of the new objects that need to be added
+    frame_objects = []
+    for i in data['assets']:
+        frame_object = {
+            'name': data['assets'][i]['asset']['name'],
+            'height': data['assets'][i]['asset']['size']['height'],
+            'width': data['assets'][i]['asset']['size']['width'],
+            'tools': []
+        }
+
+        # Set the image size
+        image_size = [
+            data['assets'][i]['asset']['size']['width'], 
+            data['assets'][i]['asset']['size']['height']
+        ]
+
+        # Regions are the boxes drawn
+        regions = data['assets'][i]['regions']
+
+        for r in regions:
+            region_class = re.sub('muscle patch', 'muscle', r['tags'][0])
+            # Check if we have wrong number of tags. These samples will be fixed by hand
+            if len(r['tags']) != 1:
+                print(f"Frame {frame_object['name']} has some errors")
+
+            frame_object['tools'].append({
+                    'type': region_class,
+                    'coordinates': [
+                        (
+                            floor(r['boundingBox']['left']), 
+                            floor(r['boundingBox']['top'])
+                        ),
+                        (
+                            min(image_size[0], ceil(r['boundingBox']['left'] + r['boundingBox']['width'])),
+                            min(image_size[1], ceil(r['boundingBox']['top'] + r['boundingBox']['height']))
+                        )
+                    ]
+                })
+
+        frame_objects.append(frame_object)
+
+        # Now add to the xmls
+        old_file = os.path.join(annotations_dir, re.sub('\\.jpeg$', '.xml', frame_object['name']))
+        tree = etree.parse(old_file)
+        root = tree.getroot()
+
+        skip_update = False
+        for ele in root.iter('name'):
+            if ele.text == 'muscle':
+                # print(f"The file {frame_object['name']} already has muscle annotated")
+                skip_update = True
+
+        if skip_update:
+            continue
+
+        for t in frame_object['tools']:
+            tool_element = etree.SubElement(root, 'object')
+            
+            name = etree.SubElement(tool_element, 'name')
+            name.text = t['type']
+            pose = etree.SubElement(tool_element, 'pose')
+            pose.text = 'Unspecified'
+            for f in ['truncated', 'difficult']:
+                fo = etree.SubElement(tool_element, f)
+                fo.text = '0'
+
+            bndbox = etree.SubElement(tool_element, 'bndbox')
+            for i in [
+                ['xmin', t['coordinates'][0][0]], ['ymin', t['coordinates'][0][1]], 
+                ['xmax', t['coordinates'][1][0]], ['ymax', t['coordinates'][1][1]]
+            ]:
+                bele = etree.SubElement(bndbox, i[0])
+                bele.text = str(i[1])
+        # Save the new data
+        myfile = open(old_file, "wb")
+        myfile.write(etree.tostring(root, pretty_print=True))
+        myfile.close()
+
+    # Now have to add the muscles added above 
+    # We also have to remove cases where previously that frame was labelled as blank
+    rows_to_add = {
+        'name': [],
+        'x1': [],
+        'y1': [],
+        'x2': [],
+        'y2': [],
+        'class': []
+    }
+    for fo in frame_objects:
+        for t in fo['tools']:
+            # add it
+            rows_to_add['name'].append(fo['name'])
+            rows_to_add['x1'].append(t['coordinates'][0][0])
+            rows_to_add['y1'].append(t['coordinates'][0][1])
+            rows_to_add['x2'].append(t['coordinates'][1][0])
+            rows_to_add['y2'].append(t['coordinates'][1][1])
+            rows_to_add['class'].append(t['type'])
+
+            # remove rows that were all blanks for this frame
+            # unlikely to happen for muscle
+            complete_set_df = complete_set_df[~((complete_set_df['name'] == fo['name']) & (complete_set_df['x1']==''))].reset_index(drop=True)
+
+    return pd.concat([complete_set_df.reset_index(drop=True), pd.DataFrame(rows_to_add)])
+
