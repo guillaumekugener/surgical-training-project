@@ -5,6 +5,8 @@ import re
 import progressbar
 
 import matplotlib.pyplot as plt
+from matplotlib.path import Path
+import matplotlib.patches as patches
 from seaborn import scatterplot
 
 from math import sqrt, floor, ceil
@@ -13,6 +15,13 @@ from scipy.stats import (
 )
 
 FRAME_MAX=100000
+TOOL_COLORS={
+	'suction': 'blue',
+	'grasper': 'orange',
+	'cottonoid': 'green',
+	'muscle': 'red',
+	'string': 'purple'
+}
 
 """
 ICATrialFeatures
@@ -583,12 +592,14 @@ class VideoTrial:
 	def plot_tool_positions(
 		self, 
 		tools=[],
-		n_frames=FRAME_MAX
+		n_frames=FRAME_MAX,
+		s_frame=0
 	):
 		# We have to get the plot data
 		positions_dict = { 'x': [], 'y': [], 'class': []}
 		for tool in tools:
-			positions = self.get_tool_path(tool, n_frames=n_frames)
+			positions = self.get_tool_path(tool, n_frames=s_frame+n_frames)
+			positions = positions[s_frame:]
 
 			positions_dict['x'] += [i[0] for i in positions]
 			positions_dict['y'] += [i[1] for i in positions]
@@ -599,6 +610,8 @@ class VideoTrial:
 		ax = scatterplot(data=positions_df, x='x', y='y', hue='class')
 		ax.invert_yaxis()
 
+		return ax.get_figure()
+
 	"""
 	Plot paths across frames
 
@@ -607,13 +620,9 @@ class VideoTrial:
 	def plot_tool_paths(
 		self, 
 		tools=[],
-		tool_colors={
-			'suction': 'blue',
-			'grasper': 'orange',
-			'cottonoid': 'green',
-			'muscle': 'red',
-			'string': 'purple'
-		}
+		tool_colors=TOOL_COLORS,
+		n_frames=FRAME_MAX,
+		s_frame=0
 	):
 		positions_dict = { 
 			'x': [], 'y': [],
@@ -622,7 +631,9 @@ class VideoTrial:
 		}
 
 		for tool in tools:
-			positions = self.get_tool_path(tool)
+			positions = self.get_tool_path(tool, n_frames=s_frame+n_frames)
+			positions = positions[s_frame:]
+
 			positions_dict['x'] += [i[0] for i in positions[:len(positions)-1]]
 			positions_dict['y'] += [i[1] for i in positions[:len(positions)-1]]
 
@@ -633,6 +644,7 @@ class VideoTrial:
 
 		positions_df = pd.DataFrame(positions_dict)
 
+		fig = plt.figure()
 		for r in range(positions_df.shape[0]):
 			x, y, xend, yend, cl = positions_df.loc[r, ['x', 'y', 'xend', 'yend', 'class']]
 
@@ -641,28 +653,106 @@ class VideoTrial:
 
 			plt.plot([x, xend], [y, yend], c=tool_colors[cl], ls='-')
 
-		plt.show()
+		return fig
 
 	"""
 	Plot tool positions as heatmap
 	"""
-	def plot_tool_heatmap(self, tool, n_frames=FRAME_MAX):
-		tool_heatmap = np.zeros((self.frame_size[1], self.frame_size[0]))
-		for f in self.frames[:n_frames]:
-			tool_heatmap += f.get_tool_bbox_binary(tool)
+	def plot_tool_heatmap(self, tools, n_frames=FRAME_MAX, s_frame=0):
+		fig = plt.figure()
 
-		plt.imshow(tool_heatmap, cmap='hot', interpolation='nearest')
-		plt.show()
+		subplot_nums = [221, 222, 223, 224]
+		for ti, t in enumerate(tools):
+			tool_heatmap = np.zeros((self.frame_size[1], self.frame_size[0]))
+			for f in self.frames[s_frame:s_frame+n_frames]:
+				tool_heatmap += f.get_tool_bbox_binary(t)
+			ax1 = fig.add_subplot(subplot_nums[ti])
+			ax1.title.set_text(t)
+			plt.imshow(tool_heatmap, cmap='hot', interpolation='nearest')
+
+		return fig
 
 	"""Get n tools in view across frames"""
-	def get_n_tools_in_view(self, ignore=[], n_frames=FRAME_MAX):
+	def get_n_tools_in_view(self, ignore=[], n_frames=FRAME_MAX, s_frame=0):
 		n_tools_in_view = []
-		frames = self.frames[:n_frames]
+		frames = self.frames[s_frame:s_frame+n_frames]
 
 		for f in frames:
 			n_tools_in_view.append(len(f.get_tools(ignore=ignore)))
 
 		return n_tools_in_view
+
+	"""
+	Plot tool presence over course of trial
+	"""
+	def plot_tool_presence(
+		self, 
+		tools=[],
+		tool_colors=TOOL_COLORS, 
+		n_frames=FRAME_MAX, 
+		s_frame=0
+	):
+		tools_data = {}
+		for t in tools:
+			tools_data[t] = []
+
+		frames = self.frames[s_frame:s_frame+n_frames]
+
+		for f in frames:
+			for t in tools:
+				if f.has_tool(t):
+					tools_data[t].append(1)
+				else:
+					tools_data[t].append(0)
+
+		# Now have to convert binary arrays into coordinates of rectanges that we will be plotting
+		codes = [Path.MOVETO, Path.LINETO, Path.LINETO, Path.LINETO, Path.CLOSEPOLY]
+
+		vertices = []
+		for ti, tool in enumerate(tools):
+			state = False
+			current_start = 0
+
+			for i, present in enumerate(tools_data[tool]):
+				if present == 1 and state:
+					# continue as normal
+					pass
+				elif present == 0 and state:
+					if i - current_start > 0:
+						# we have come to the end of a block
+						vertices.append({
+							'path': [
+								(current_start, ti),
+								(current_start, ti+1),
+								(i, ti+1),
+								(i, ti),
+								(current_start, ti)
+							],
+							'tool': tool
+						})
+					state = False
+				elif present == 1 and not state:
+					current_start = i
+					state = True
+				else:
+					# do nothing
+					pass
+
+		fig = plt.figure()
+		ax = fig.add_subplot(111)
+
+		for verts in vertices:
+			path = Path(verts['path'], codes)
+			patch = patches.PathPatch(path, facecolor=tool_colors[verts['tool']], lw=0)
+			ax.add_patch(patch)
+
+		plt.yticks(np.arange(len(tools))+0.5, tools)
+
+		ax.set_xlim(-1,len(frames)+1)
+		ax.set_ylim(-0.25,len(tools)+0.25)
+		
+		return fig
+
 
 """
 IndividualFrame
@@ -752,12 +842,12 @@ class IndividualFrame:
 	"""
 	def get_tool_bbox_binary(self, tool):
 		frame_array = np.zeros((self.frame_size[1], self.frame_size[0]))
-
 		relevant_tools = self.get_specific_tool(tool)
 
 		for to in relevant_tools:
-			x1, y1, x2, y2 = [int(i) for i in to.get_standard_coordinates()]
-
+			x1, y1, x2, y2 = [i for i in to.get_standard_coordinates()]
+			x1, x2 = [int(i*self.frame_size[0]) for i in [x1, x2]]
+			y1, y2 = [int(i*self.frame_size[1]) for i in [y1, y2]]
 
 			tool_array = np.ones((y2-y1, x2-x1))
 			frame_array[y1:y2,x1:x2] += tool_array
