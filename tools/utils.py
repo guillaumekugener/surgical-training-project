@@ -327,28 +327,41 @@ def make_frame_object_from_file(file_path, IMG_SIZE=(None, None), scale=True):
 
     return data_to_append
 
-def plot_frame_with_bb(image_path, annotation_path):
+def plot_frame_with_bb(image_path, annotation_path, only_undefined=False, save_path=None):
     img_array = cv2.cvtColor(cv2.imread(image_path), cv2.COLOR_RGB2BGR)
     fig,ax = plt.subplots(1)
     ax.imshow(img_array)
 
-    frame_object = make_frame_object_from_file(annotation_path, IMG_SIZE=img_array.shape[0])
+    frame_object = make_frame_object_from_file(annotation_path)
 
-    print(f"Image size: {img_array.shape}")
+    # print(f"Image size: {img_array.shape}")
 
     # Draw the ground truth boxes
     for ro in frame_object['objects']:
-        coords = [i * img_array.shape[0] for i in ro['coords']]
+        if ro['class'] != 'undefined' and only_undefined:
+            continue
+        coords = [i for i in ro['coords']]
+        coords = [
+            coords[0] * img_array.shape[1],
+            coords[1] * img_array.shape[0],
+            coords[2] * img_array.shape[1],
+            coords[3] * img_array.shape[0]
+        ]
+
         rect = Rectangle(
             (coords[0], coords[1]), 
             coords[2] - coords[0], 
             coords[3] - coords[1], 
             linewidth=1,edgecolor='b',facecolor='none')
 
-        print(f"{ro['class']} coordinates: {coords}")
+        # print(f"{ro['class']} coordinates: {coords}")
         ax.add_patch(rect) 
+        plt.annotate(ro['class'], (coords[0], coords[1]), size=20, c='blue')
 
-    plt.show()
+    # plt.show()
+    if save_path is not None:
+        plt.savefig(save_path)
+    plt.close()
 
 
 # Given a frame object, make a plot of the image
