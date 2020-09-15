@@ -446,6 +446,9 @@ def create_retinanet_csv(all_objects_ds_df, dir_prefix, final_dataset_directory,
         data_csv = all_objects_ds_df[ret_data_indicies].copy()
         data_csv['name'] = dir_prefix + data_csv['name']
 
+        for col in ['x1', 'y1', 'x2', 'y2']:
+            data_csv[col] = [str(int(i)) if i != '' else '' for i in data_csv[col]]
+
         # We need to set the full path    
         data_csv.to_csv(
             os.path.join(final_dataset_directory, 'ImageSets/Main', f"{csv_name}_{g}.csv"),
