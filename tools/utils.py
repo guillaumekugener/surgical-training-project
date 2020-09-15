@@ -293,6 +293,25 @@ def combine_predictions_and_ground_truth(all_frames, classes_map, detected_objec
         all_frames_objects.append(data_to_append)
     return(all_frames_objects)
 
+"""
+make_frame_object_from_file
+
+Given the path to an XML file, convert it into a frame object
+
+Args: 
+- file_path
+    path to xml
+- IMG_SZE
+    tuple of the image size (width, height)
+- scale
+    whether to normalize the size of the vlaues or not
+
+Output
+- frame object:
+    dictionary with the follow keys
+    - frame_id: path to the image file
+    - object: array of objects in the frame
+"""
 def make_frame_object_from_file(file_path, IMG_SIZE=(None, None), scale=True):
     annotation_xml = etree.parse(file_path)
 
@@ -306,13 +325,22 @@ def make_frame_object_from_file(file_path, IMG_SIZE=(None, None), scale=True):
             for sn in node.iter('height'):
                 img_height = float(sn.text)
 
+    data_to_append = { 
+        'name': file_path,
+        'width': img_width,
+        'height': img_height,
+        'tools': [] 
+    }
+
+    # If we do not want to scale
     if not scale:
         img_height = 1
         img_width = 1
 
-    data_to_append = { 'frame_id': file_path, 'objects': [] }
     for obj in annotation_xml.findall('object'):
         true_class = obj.find('name').text
+        true_class = re.sub('muscle patch', 'muscle', true_class)
+        true_class = re.sub('other', 'tool', true_class)
         
         true_coordinates = []
         for corner in ['xmin', 'ymin', 'xmax', 'ymax']:
@@ -320,12 +348,71 @@ def make_frame_object_from_file(file_path, IMG_SIZE=(None, None), scale=True):
             if corner in ['xmin', 'xmax']:
                 denom = img_width
             true_coordinates.append(float(obj.find('bndbox').find(corner).text)/denom)
-        data_to_append['objects'].append({ 
-            'class': true_class, 
-            'coords': true_coordinates
+        
+        data_to_append['tools'].append({ 
+            'type': true_class, 
+            'coordinates': [
+                (true_coordinates[0], true_coordinates[1]),
+                (true_coordinates[2], true_coordinates[3])
+            ]
         })
 
     return data_to_append
+
+"""
+convert_frame_object_to_xml
+
+Given a frame object and a file path, convert it to an xml and save at the path
+"""
+def convert_frame_object_to_xml(frame_obj, destination, prefix=''):
+    # create the file structure
+    annotation = etree.Element('annotation')
+    annotation.set('verified', 'no')
+    
+    frame_file_name = prefix + re.sub('.*/', '', frame_obj['name'])
+    
+    folder = etree.SubElement(annotation, 'folder')
+    folder.text = 'images'
+    
+    filename = etree.SubElement(annotation, 'filename')
+    filename.text = frame_file_name
+    
+    path = etree.SubElement(annotation, 'path')
+    path.text = os.path.join(destination, frame_file_name)
+    
+    source = etree.SubElement(annotation, 'source')
+    
+    database = etree.SubElement(source, 'database')
+    database.text = 'Unknown'
+    
+    size = etree.SubElement(annotation, 'size')
+    for i in [['width', frame_obj['width']], ['height', frame_obj['height']], ['depth', 3]]:
+        ele = etree.SubElement(size, i[0])
+        ele.text = str(int(i[1]))
+        
+    segmented = etree.SubElement(annotation, 'segmented')
+    segmented.text = '0'
+    
+    for t in frame_obj['tools']:            
+        obj = etree.SubElement(annotation, 'object')
+        
+        for i in [['name', t['type']], ['pose', 'Unspecified'], ['truncated', 0], ['difficult', 0]]:
+            n = etree.SubElement(obj, i[0])
+            n.text = str(i[1])
+        
+        bndbox = etree.SubElement(obj, 'bndbox')
+        for i in [
+            ['xmin', t['coordinates'][0][0]], ['ymin', t['coordinates'][0][1]], 
+            ['xmax', t['coordinates'][1][0]], ['ymax', t['coordinates'][1][1]]
+        ]:
+            bele = etree.SubElement(bndbox, i[0])
+            bele.text = str(int(i[1]))
+        
+    # create a new XML file with the results
+    myfile = open(os.path.join(destination, re.sub('\\.jpeg', '.xml', frame_file_name)), "wb")
+    myfile.write(etree.tostring(annotation, pretty_print=True))
+    myfile.close()
+
 
 def plot_frame_with_bb(image_path, annotation_path, only_undefined=False, save_path=None):
     img_array = cv2.cvtColor(cv2.imread(image_path), cv2.COLOR_RGB2BGR)
