@@ -19,7 +19,11 @@ import matplotlib.patches as patches
 from PIL import Image
 import numpy as np
 
-from utils import plot_frame_with_bb
+from utils import (
+    plot_frame_with_bb, 
+    make_frame_object_from_file,
+    convert_frame_object_to_xml
+)
 
 class SurgicalVideoAnnotation():
     def __init__(self, trial_id, file_path, total_frames, output_directory, delete_at_end=True, assume_missing_empty=True, annotations_only=True, manually_fixed_cases=None):
@@ -160,7 +164,7 @@ class SurgicalVideoAnnotation():
             regions = data['assets'][i]['regions']
 
             for r in regions:
-                region_class = r['tags'][0]
+                region_class = re.sub('muscle patch', 'muscle', r['tags'][0])
                 # Check if we have wrong number of tags. These samples will be fixed by hand
                 if len(r['tags']) != 1:
                     # In this case, we had to manually fix it or will have to.
@@ -322,7 +326,7 @@ class SurgicalVideoAnnotation():
                     'y1': d['ymin'],
                     'x2': d['xmax'],
                     'y2': d['ymax'],
-                    'class': d['class']
+                    'class': re.sub('muscle patch', 'muscle', d['class'])
                 })
 
             # There were no object in this frame
@@ -377,53 +381,11 @@ class SurgicalVideoAnnotation():
 
     # Given a frame object 
     def generate_frame_annotation_xml(self, frame_obj, destination, prefix=''):        
-        # create the file structure
-        annotation = etree.Element('annotation')
-        annotation.set('verified', 'no')
-        
-        frame_file_name = prefix + re.sub('.*/', '', frame_obj['name'])
-        
-        folder = etree.SubElement(annotation, 'folder')
-        folder.text = 'images'
-        
-        filename = etree.SubElement(annotation, 'filename')
-        filename.text = frame_file_name
-        
-        path = etree.SubElement(annotation, 'path')
-        path.text = os.path.join(destination, frame_file_name)
-        
-        source = etree.SubElement(annotation, 'source')
-        
-        database = etree.SubElement(source, 'database')
-        database.text = 'Unknown'
-        
-        size = etree.SubElement(annotation, 'size')
-        for i in [['width', frame_obj['width']], ['height', frame_obj['height']], ['depth', 3]]:
-            ele = etree.SubElement(size, i[0])
-            ele.text = str(i[1])
-            
-        segmented = etree.SubElement(annotation, 'segmented')
-        segmented.text = '0'
-        
-        for t in frame_obj['tools']:            
-            obj = etree.SubElement(annotation, 'object')
-            
-            for i in [['name', t['type']], ['pose', 'Unspecified'], ['truncated', 0], ['difficult', 0]]:
-                n = etree.SubElement(obj, i[0])
-                n.text = str(i[1])
-            
-            bndbox = etree.SubElement(obj, 'bndbox')
-            for i in [
-                ['xmin', t['coordinates'][0][0]], ['ymin', t['coordinates'][0][1]], 
-                ['xmax', t['coordinates'][1][0]], ['ymax', t['coordinates'][1][1]]
-            ]:
-                bele = etree.SubElement(bndbox, i[0])
-                bele.text = str(i[1])
-            
-        # create a new XML file with the results
-        myfile = open(os.path.join(destination, re.sub('\\.jpeg', '.xml', frame_file_name)), "wb")
-        myfile.write(etree.tostring(annotation, pretty_print=True))
-
+        convert_frame_object_to_xml(
+            frame_obj=frame_obj,
+            destination=destination,
+            prefix=prefix
+        )
 
 def get_total_frames(dir_with_image_zips, output_file_name):
     images_zips = [i for i in os.listdir(dir_with_image_zips) if re.search('\\.zip$', i)]
@@ -478,23 +440,17 @@ def extract_and_move_images(dir_with_image_zips, output_directory, trials_to_pro
 
         zf.close()
 
-def create_retinanet_csv(all_objects_ds_df, dir_prefix, final_dataset_directory, csv_name, validation_trials=[]):
-    validation_indices = all_objects_ds_df['name'].str.contains('|'.join(validation_trials))
-    retinanet_training_csv = all_objects_ds_df[~validation_indices].copy()
-    retinanet_validation_csv = all_objects_ds_df[validation_indices].copy()
+def create_retinanet_csv(all_objects_ds_df, dir_prefix, final_dataset_directory, csv_name, grouping):
+    for g in grouping:
+        ret_data_indicies = all_objects_ds_df['name'].str.contains('|'.join(['^' + gi for gi in grouping[g]])) 
+        data_csv = all_objects_ds_df[ret_data_indicies].copy()
+        data_csv['name'] = dir_prefix + data_csv['name']
 
-    retinanet_training_csv['name'] = dir_prefix + retinanet_training_csv['name']
-    retinanet_validation_csv['name'] = dir_prefix + retinanet_validation_csv['name']
-
-    # We need to set the full path    
-    retinanet_training_csv.to_csv(
-        os.path.join(final_dataset_directory, 'ImageSets/Main', csv_name + '_train.csv'),
-        sep=',', header=False, index=False
-    )
-    retinanet_validation_csv.to_csv(
-        os.path.join(final_dataset_directory, 'ImageSets/Main', csv_name + '_validation.csv'),
-        sep=',', header=False, index=False
-    )
+        # We need to set the full path    
+        data_csv.to_csv(
+            os.path.join(final_dataset_directory, 'ImageSets/Main', f"{csv_name}_{g}.csv"),
+            sep=',', header=False, index=False
+        )
 
 """This trial was misnamed, so this function fixes the file names"""
 def fix_S810T1b(
@@ -665,4 +621,242 @@ def add_missing_muscle(
             complete_set_df = complete_set_df[~((complete_set_df['name'] == fo['name']) & (complete_set_df['x1']==''))].reset_index(drop=True)
 
     return pd.concat([complete_set_df.reset_index(drop=True), pd.DataFrame(rows_to_add)])
+
+
+"""
+Replace failed QC with QC annotated
+"""
+def replace_qc_frames(
+    reannotation_csv,
+    qc_directory,
+    final_dataset_directory,
+    complete_set_df
+):
+    # We have to change muscle path to say muscle instead
+    # We have to copy to annotations files over
+    frames_needing_qc = pd.read_csv(reannotation_csv, skiprows=2)
+
+    frame_objects = []
+    # Iterate through each one of the frames above and replace it accordingly
+    for i in range(frames_needing_qc.shape[0]):
+        trial = frames_needing_qc.at[i,'Trial']
+        fid = frames_needing_qc.at[i, 'Frame']
+
+        image_file_name = f"{trial}_frame_{str(fid).zfill(8)}.jpeg"
+        xml_file_name = f"{trial}_frame_{str(fid).zfill(8)}.xml"
+        xml_file_path = os.path.join(qc_directory, xml_file_name)
+
+        # Check if this files exists in QC
+        if os.path.exists(xml_file_path):
+            # We have to change any muscle patches to muscle in the objects
+            frame_object = make_frame_object_from_file(xml_file_path, scale=False)
+            frame_object['name'] = image_file_name
+
+            frame_objects.append(frame_object)
+
+            convert_frame_object_to_xml(
+                frame_obj=frame_object,
+                destination=os.path.join(final_dataset_directory, 'Annotations')
+            )
+
+        else:
+            # It should be empty (could be missed as well but will assume empty...)
+            frame_object = make_frame_object_from_file(
+                os.path.join(final_dataset_directory, 'Annotations', xml_file_name)
+            )
+
+            # Clear out the tools
+            frame_object['tools'] = []
+            frame_objects.append(frame_object)
+
+            convert_frame_object_to_xml(
+                frame_obj=frame_object,
+                destination=os.path.join(final_dataset_directory, 'Annotations')
+            )
+
+    # Now have to add the muscles added above 
+    # We also have to remove cases where previously that frame was labelled as blank
+    rows_to_add = {
+        'name': [],
+        'x1': [],
+        'y1': [],
+        'x2': [],
+        'y2': [],
+        'class': []
+    }
+    for fo in frame_objects:
+        if fo['name'] == 'S301T2_frame_000000178.jpeg':
+            print(fo)
+        # Remove any cases of this frame being in the dataset
+        complete_set_df = complete_set_df[~(complete_set_df['name'] == fo['name'])].reset_index(drop=True)
+        if len(fo['tools']) > 0:
+            for t in fo['tools']:
+                # add it
+                rows_to_add['name'].append(fo['name'])
+                rows_to_add['x1'].append(t['coordinates'][0][0])
+                rows_to_add['y1'].append(t['coordinates'][0][1])
+                rows_to_add['x2'].append(t['coordinates'][1][0])
+                rows_to_add['y2'].append(t['coordinates'][1][1])
+                rows_to_add['class'].append(t['type'])
+        else:
+            # add blank rows
+            rows_to_add['name'].append(fo['name'])
+            rows_to_add['x1'].append('')
+            rows_to_add['y1'].append('')
+            rows_to_add['x2'].append('')
+            rows_to_add['y2'].append('')
+            rows_to_add['class'].append('')
+
+    # Now go through the frame objects
+    return pd.concat([complete_set_df.reset_index(drop=True), pd.DataFrame(rows_to_add)])
+
+"""
+Compile QC folder for re-annotation
+
+Given a CSV of trial ids and frames, compiles a folder that can
+be imported into VOTT to make edits to the frames
+
+Args:
+- reannotation_csv 
+    csv with columns for trial id and frame number needing rennotation
+- image_directory
+    directory that contains the images that need to be reannotated
+- complete_annotation_directory
+    directory that contains the VOTT assets for all of the trials
+- local_directory_path
+    where the folder will be created with all of the information locally
+- annotator_directory_path
+    the path of where the annotator will save this folder and load them
+    into VOTT from
+"""
+def compile_reannotation_folder(
+    reannotation_csv,
+    image_directory,
+    complete_annotation_directory,
+    local_directory_path='/Users/guillaumekugener/Desktop/qc_vott/',
+    annotator_directory_path='/Users/guillaumekugener/Desktop/qc_vott'
+):
+    
+    re_ann_df = pd.read_csv(reannotation_csv, skiprows=2)
+
+    try:
+        os.mkdir(os.path.join(local_directory_path, 'images'))
+        os.mkdir(os.path.join(local_directory_path, 'annotations'))
+    except:
+        pass
+
+    # check if vott file exists
+    vott_file = [a for a in os.listdir(os.path.join(local_directory_path, 'annotations')) if re.search('\\.vott$', a)]
+    
+    vott_setup = False
+    if len(vott_file) == 1:
+        vott_setup == True
+
+        # Map the file names to their ids (from the vott file)
+        vott_file_clean = os.path.join(local_directory_path, 'annotations', vott_file[0])
+        vott_data = None
+        with open(vott_file_clean) as f:
+            vott_data = json.load(f)
+
+        frame_to_asset_id = {}
+        for a in vott_data['assets']:
+            frame_to_asset_id[re.sub('.*/', '', vott_data['assets'][a]['name'])] = a
+
+        # can move all of the assets over
+        make_annotations(
+            re_ann_df=re_ann_df,
+            image_directory=image_directory,
+            complete_annotation_directory=complete_annotation_directory,
+            local_directory_path=local_directory_path,
+            annotator_directory_path=annotator_directory_path,
+            vott_file=vott_file_clean,
+            vott_id_mapping=frame_to_asset_id
+        )
+
+    elif len(vott_file) == 0:
+        move_images(
+            re_ann_df=re_ann_df,
+            image_directory=image_directory,
+            complete_annotation_directory=complete_annotation_directory,
+            local_directory_path=local_directory_path 
+        )
+    else:
+        print(f"> 1 vott file")
+
+def move_images(
+    re_ann_df,
+    image_directory,
+    complete_annotation_directory,
+    local_directory_path
+):
+    for i in range(re_ann_df.shape[0]):
+        trial = re_ann_df.at[i, 'Trial']
+        frame = str(re_ann_df.at[i, 'Frame']).zfill(8)
+
+        image_file_name = f"{trial}_frame_{frame}.jpeg"
+
+        # First we have to move the images into the folder
+        shutil.copyfile(
+            os.path.join(image_directory, image_file_name),
+            os.path.join(local_directory_path, 'images', image_file_name)
+        )
+
+def make_annotations(
+    re_ann_df,
+    image_directory,
+    complete_annotation_directory,
+    local_directory_path,
+    annotator_directory_path,
+    vott_file,
+    vott_id_mapping
+):
+    for i in range(re_ann_df.shape[0]):
+        trial = re_ann_df.at[i, 'Trial']
+        frame = str(re_ann_df.at[i, 'Frame']).zfill(8)
+
+        image_file_name = f"{trial}_frame_{frame}.jpeg" 
+
+        # Then we move the annotations into the folder
+        assets_zip = [a for a in os.listdir(complete_annotation_directory) if re.search(f"{trial}.*zip$", a)]
+        if len(assets_zip) != 1:
+            print('error')
+
+        az = assets_zip.pop() 
+        zf = zipfile.ZipFile(f"{complete_annotation_directory}{az}", 'r')
+
+        candidate_assets = [a for a in zf.namelist() if re.search('^' + trial + '.*asset\\.json$', a)]
+        
+        # Have to find the annotations asset.json file
+        for a in candidate_assets:
+            af = zf.open(a)
+            data = json.load(af)
+    
+            if re.sub('.*/', '', data['asset']['name']) == image_file_name:
+                # This is the file that we want to copy into our assets
+                # (1) Change the data to match the new ids
+                data['asset']['id'] = vott_id_mapping[image_file_name]
+                data['asset']['name'] = image_file_name
+                data['asset']['path'] = f"file:{local_directory_path}images/{image_file_name}"
+                
+                # (2) Save it to our new location
+                with open(os.path.join(local_directory_path, 'annotations', vott_id_mapping[image_file_name] + '-asset.json'), 'w') as f:
+                    json.dump(data, f)
+
+                af.close()
+                break # We found the matching file and moved it, so down for this image
+
+            af.close()
+        zf.close()
+    
+
+
+
+
+
+
+
+
+
+
+
 
