@@ -4,6 +4,7 @@ import pandas as pd
 import re
 import progressbar
 
+import seaborn as sns
 import matplotlib.pyplot as plt
 from matplotlib.path import Path
 import matplotlib.patches as patches
@@ -34,6 +35,7 @@ class ICATrialFeatures:
 		self,
 		csv_file_name,
 		csv_class_file,
+		csv_frame_sizes,
 		csv_outcomes_file=None,
 		verbose=False,
 		trials_to_ignore=[]
@@ -53,6 +55,14 @@ class ICATrialFeatures:
 		self.data = self.data[~self.data['vid'].isin(trials_to_ignore)]
 
 		self.classes = pd.read_csv(csv_class_file, names=['class', 'ind'])
+		frame_sizes_df = pd.read_csv(csv_frame_sizes)
+		self.frame_sizes = {}
+		for fi in range(frame_sizes_df.shape[0]):
+			self.frame_sizes[frame_sizes_df.loc[fi,'trial_id']] = (
+				int(frame_sizes_df.loc[fi, 'w']),
+				int(frame_sizes_df.loc[fi, 'h'])
+			)
+
 		self.outcomes_data = pd.read_csv(csv_outcomes_file)
 		self.verbose = verbose
 
@@ -92,6 +102,7 @@ class ICATrialFeatures:
 				video_data=self.data[self.data['vid']==vid], 
 				video_id=vid,
 				verbose=self.verbose,
+				frame_size=self.frame_sizes[vid],
 				outcomes_data=self.outcomes_data[self.outcomes_data['SurveyID']==get_participant_id_from_string(vid)]
 			))
 
@@ -253,6 +264,28 @@ class ICATrialFeatures:
 
 		return pd.DataFrame(t_test_results)
 
+	"""
+	Plot TTH vs. n frames annotated
+
+	To compare what the recorded TTH is and how many frames were annotated for that video.
+	We want to make sure that there are not huge differences (and if there are, are they 
+	explained)
+	"""
+	def plot_tth_v_n_frames(self, save_path):
+		scatter_outcomes_tth_v_n_frames = { 'trial_id': [], 'n_frames': [], 'tth': [] }
+		for vo in self.videos:
+		    scatter_outcomes_tth_v_n_frames['trial_id'].append(vo.get_video_id())
+		    scatter_outcomes_tth_v_n_frames['tth'].append(vo.outcomes_data['Trial TTH'])
+		    scatter_outcomes_tth_v_n_frames['n_frames'].append(vo.get_video_length())
+
+		outcomes_compare_df = pd.DataFrame(scatter_outcomes_tth_v_n_frames)
+		# ax = scatterplot(data=outcomes_compare_df, x='tth', y='n_frames')
+		
+		grid = sns.JointGrid(outcomes_compare_df.tth, outcomes_compare_df.n_frames, space=0, size=6, ratio=50)
+		grid.plot_joint(plt.scatter)
+		plt.plot([0,300],[0,250], linewidth=2)
+
+		grid.savefig(save_path)
 
 """
 VideoTrial
@@ -292,6 +325,12 @@ class VideoTrial:
 				frame_size = (1920, 1080)
 			elif max_x == 1487 and max_y == 1048:
 				frame_size = (1920, 1080)
+			elif max_x == 1631 and max_y == 1041:
+				frame_size = (1920, 1080)
+			elif max_x == 1446 and max_y == 1049:
+				frame_size = (1920, 1080)
+			elif max_x == 1495 and max_y == 1051:
+				frame_size = (1920, 1080)
 			else:
 				print(f"Could not find frame size for {self.video_id}. {max_x}, {max_y}")
 				print(self.video_data.head())
@@ -302,6 +341,19 @@ class VideoTrial:
 	"""Get trial id"""
 	def get_video_id(self):
 		return self.video_id
+
+	"""Succeeded trial (returns boolean)"""
+	def succeeded_trial(self):
+		return self.outcomes_data['Trial Success'] == 1
+
+	"""
+	Succeeds trial in next n frames
+
+	Given a number of frames, determine if the participant
+	achieves hemostasis in the next n frames
+	"""
+	def succeeds_trial_in_next_n(self, start_frame, n_frames):
+		return start_frame + n_frames >= len(self.get_video_length())
 
 	"""Get trial number"""
 	def get_trial_number(self):
@@ -991,5 +1043,13 @@ def get_participant_id_from_string(s):
 
 	return s
 
+"""
+Get trial image size given dataset path
+"""
+def get_trial_image_size(trial_id, datasetpath):
+	from PIL import Image
 
+	example_image = [i for i in os.listdir(datasetpath) if re.search(trial_id, i)][0]
+	img = Image.open(os.path.join(datasetpath, example_image))
+	return img.size
 
