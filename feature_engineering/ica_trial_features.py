@@ -1053,3 +1053,23 @@ def get_trial_image_size(trial_id, datasetpath):
 	img = Image.open(os.path.join(datasetpath, example_image))
 	return img.size
 
+"""
+Make a file that lists all of the frame sizes
+"""
+def make_frame_size_file(datasetpath, save_path):
+	all_trials_in_cohort = set([re.search('S[0-9]+T[0-9]+', i).group(0) for i in os.listdir(os.path.join(datasetpath, 'JPEGImages'))])
+
+	frame_sizes = { 'trial_id': [], 'w': [], 'h': [] }
+	for trial_id in all_trials_in_cohort:
+	    size_d = get_trial_image_size(
+	        trial_id = trial_id, 
+	        datasetpath = os.path.join(
+	            datasetpath,
+	            'JPEGImages'
+	        ))
+	    frame_sizes['trial_id'].append(trial_id)
+	    frame_sizes['w'].append(size_d[0])
+	    frame_sizes['h'].append(size_d[1])
+
+	fs_df = pd.DataFrame(frame_sizes)
+	fs_df.to_csv(save_path)
