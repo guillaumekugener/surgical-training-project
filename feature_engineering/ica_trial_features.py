@@ -42,7 +42,7 @@ class ICATrialFeatures:
 		
 		na_values = {'file': 0, 'x1': 0, 'y1': 0, 'x2': 0, 'y2': 0, 'class': ''}
 
-		self.data = pd.read_csv(csv_file_name, names=['file', 'x1', 'y1', 'x2', 'y2', 'class'])
+		self.data = pd.read_csv(csv_file_name, names=['file', 'x1', 'y1', 'x2', 'y2', 'class'], engine= 'python')
 		self.data = self.data.fillna(value=na_values)
 		self.data['original_vid'] = [re.search('S[0-9]+T[0-9]+[a-z]?', i).group(0) for i in self.data['file']]
 
@@ -459,7 +459,7 @@ class VideoTrial:
 			
 			velocities.append(velocity)
 
-		return velocities
+		return velocities[:n_frames]
 
 	"""
 	Get area covered by tool
@@ -671,6 +671,36 @@ class VideoTrial:
 			plt.imshow(tool_heatmap, cmap='hot', interpolation='nearest')
 
 		return fig
+
+	"""
+	Plot tool velocity over all frames
+
+	Plots the velocity measured at the center of each tool across all 
+ 	frames
+	"""
+	def plot_tool_velocities(
+		self, 
+		tools=[],
+		n_frames=FRAME_MAX,
+		s_frame=0
+	):
+		# We have to get the velocity data
+		velocities_dict = { 'frame': [], 'velocity': [], 'class': []}
+		for tool in tools:
+			velocities = self.get_tool_velocities(tool, n_frames=s_frame+n_frames)
+			velocities = velocities[s_frame:]
+
+			# Sets values of velocity dict: frames are numbered from s_frame to n_frames
+			velocities_dict['frame'] += [i for i in range(len(velocities))]
+			velocities_dict['velocity'] += [v for v in velocities]
+			velocities_dict['class'] += [tool for i in range(len(velocities))]
+
+		velocities_df = pd.DataFrame(velocities_dict)
+
+		# ax = velocities_df.plot.bar(x='frame', y='velocity', color = TOOL_COLORS[tools[0]])
+		ax = velocities_df.plot.scatter(x='frame', y='velocity', c=TOOL_COLORS[tools[0]])
+
+		return ax.get_figure()
 
 	"""Get n tools in view across frames"""
 	def get_n_tools_in_view(self, ignore=[], n_frames=FRAME_MAX, s_frame=0):
