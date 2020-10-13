@@ -4,6 +4,7 @@ import pandas as pd
 import re
 import progressbar
 
+import seaborn as sns
 import matplotlib.pyplot as plt
 from matplotlib.path import Path
 import matplotlib.patches as patches
@@ -34,6 +35,7 @@ class ICATrialFeatures:
 		self,
 		csv_file_name,
 		csv_class_file,
+		csv_frame_sizes,
 		csv_outcomes_file=None,
 		verbose=False,
 		trials_to_ignore=[]
@@ -53,6 +55,14 @@ class ICATrialFeatures:
 		self.data = self.data[~self.data['vid'].isin(trials_to_ignore)]
 
 		self.classes = pd.read_csv(csv_class_file, names=['class', 'ind'])
+		frame_sizes_df = pd.read_csv(csv_frame_sizes)
+		self.frame_sizes = {}
+		for fi in range(frame_sizes_df.shape[0]):
+			self.frame_sizes[frame_sizes_df.loc[fi,'trial_id']] = (
+				int(frame_sizes_df.loc[fi, 'w']),
+				int(frame_sizes_df.loc[fi, 'h'])
+			)
+
 		self.outcomes_data = pd.read_csv(csv_outcomes_file)
 		self.verbose = verbose
 
@@ -92,6 +102,7 @@ class ICATrialFeatures:
 				video_data=self.data[self.data['vid']==vid], 
 				video_id=vid,
 				verbose=self.verbose,
+				frame_size=self.frame_sizes[vid],
 				outcomes_data=self.outcomes_data[self.outcomes_data['SurveyID']==get_participant_id_from_string(vid)]
 			))
 
@@ -253,6 +264,28 @@ class ICATrialFeatures:
 
 		return pd.DataFrame(t_test_results)
 
+	"""
+	Plot TTH vs. n frames annotated
+
+	To compare what the recorded TTH is and how many frames were annotated for that video.
+	We want to make sure that there are not huge differences (and if there are, are they 
+	explained)
+	"""
+	def plot_tth_v_n_frames(self, save_path):
+		scatter_outcomes_tth_v_n_frames = { 'trial_id': [], 'n_frames': [], 'tth': [] }
+		for vo in self.videos:
+		    scatter_outcomes_tth_v_n_frames['trial_id'].append(vo.get_video_id())
+		    scatter_outcomes_tth_v_n_frames['tth'].append(vo.outcomes_data['Trial TTH'])
+		    scatter_outcomes_tth_v_n_frames['n_frames'].append(vo.get_video_length())
+
+		outcomes_compare_df = pd.DataFrame(scatter_outcomes_tth_v_n_frames)
+		# ax = scatterplot(data=outcomes_compare_df, x='tth', y='n_frames')
+		
+		grid = sns.JointGrid(outcomes_compare_df.tth, outcomes_compare_df.n_frames, space=0, size=6, ratio=50)
+		grid.plot_joint(plt.scatter)
+		plt.plot([0,300],[0,250], linewidth=2)
+
+		grid.savefig(save_path)
 
 """
 VideoTrial
@@ -292,6 +325,12 @@ class VideoTrial:
 				frame_size = (1920, 1080)
 			elif max_x == 1487 and max_y == 1048:
 				frame_size = (1920, 1080)
+			elif max_x == 1631 and max_y == 1041:
+				frame_size = (1920, 1080)
+			elif max_x == 1446 and max_y == 1049:
+				frame_size = (1920, 1080)
+			elif max_x == 1495 and max_y == 1051:
+				frame_size = (1920, 1080)
 			else:
 				print(f"Could not find frame size for {self.video_id}. {max_x}, {max_y}")
 				print(self.video_data.head())
@@ -302,6 +341,19 @@ class VideoTrial:
 	"""Get trial id"""
 	def get_video_id(self):
 		return self.video_id
+
+	"""Succeeded trial (returns boolean)"""
+	def succeeded_trial(self):
+		return self.outcomes_data['Trial Success'] == 1
+
+	"""
+	Succeeds trial in next n frames
+
+	Given a number of frames, determine if the participant
+	achieves hemostasis in the next n frames
+	"""
+	def succeeds_trial_in_next_n(self, start_frame, n_frames):
+		return start_frame + n_frames >= len(self.get_video_length())
 
 	"""Get trial number"""
 	def get_trial_number(self):
@@ -395,6 +447,20 @@ class VideoTrial:
 			positions.append(f.get_tool_position(tool))
 
 		return positions[:n_frames]
+	
+	"""
+	Get tool path coords
+
+	Gets a list of tool coordinates [x1,y1,x2,y2] for each frame and returns
+	them as a list
+	"""
+	def get_tool_path_coords(self, tool, n_frames=FRAME_MAX):
+		positions = []
+
+		for f in self.frames:
+			positions.append(f.get_standard_coordinates(tool))
+
+		return positions[:n_frames]
 
 	"""
 	Get tool path length
@@ -441,7 +507,7 @@ class VideoTrial:
 
 	Right velocity is None unless both points are defined
 	"""
-	def get_tool_velocities(self, tool, window_size=2, n_frames=FRAME_MAX):
+	def get_tool_velocities_standard(self, tool, window_size=2, n_frames=FRAME_MAX):
 		tool_path = self.get_tool_path(tool, n_frames=n_frames)
 
 		velocities = [None]
@@ -453,11 +519,47 @@ class VideoTrial:
 			source = vals[0]
 
 			# Since this is velocity, we will keep track of directionality
-			velocity = None
+			velocity = 0
 			if (len(vals) > 1) and (dest[0] is not None) and (source[0] is not None):
 				velocity = sqrt((dest[0]-source[0])**2 + (dest[1]-source[1])**2)/len(vals)
 			
 			velocities.append(velocity)
+
+		return velocities[:n_frames]
+
+	"""
+	Get the tool velocity as an intersection over union
+	"""
+
+	def get_tool_velocities_iou(self, tool, window_size=2, n_frames=FRAME_MAX):
+		tool_path = self.get_tool_path_coords(tool, n_frames=n_frames)
+		tool_areas = self.get_area_covered_by_tool(tool, n_frames=n_frames)
+		assert len(tool_path) == len(tool_areas), "tool path and tool areas are not equal sized"
+
+		velocities = [None]
+		for pi in range(1, len(tool_path)):
+			vals = tool_path[max(0, pi-1):min(pi+window_size, len(tool_path)-1)]
+			vals = [i for i in vals if i is not None]
+
+			areas = tool_areas[max(0, pi-1):min(pi+window_size, len(tool_path)-1)]
+			areas = [i for i in areas if i is not None]
+
+			dest = vals[-1]
+			source = vals[0]
+			dest_area = areas[-1]
+			source_area = areas[0]
+
+			# Since this is velocity, we will keep track of directionality
+			iou_velocity = 0
+			if (len(vals) > 1) and (dest[0] is not None) and (source[0] is not None):
+				intersection = overlap_area(dest, source)
+				if (intersection != None):
+					union = dest_area + source_area - intersection
+					iou = intersection/union
+					iou_velocity = 1/iou
+
+			
+			velocities.append(iou_velocity)
 
 		return velocities[:n_frames]
 
@@ -518,7 +620,7 @@ class VideoTrial:
 		for tool in tools:
 			features_dict['position_' + tool] = self.get_tool_path(tool, n_frames=n_frames)
 			features_dict['area_covered_' + tool] = self.get_area_covered_by_tool(tool, n_frames=n_frames)
-			features_dict['velocity_' + tool] = self.get_tool_velocities(tool, n_frames=n_frames)
+			features_dict['velocity_' + tool] = self.get_tool_velocities_standard(tool, n_frames=n_frames)
 
 		# Combination tool features
 		for t1 in tools:
@@ -682,23 +784,32 @@ class VideoTrial:
 		self, 
 		tools=[],
 		n_frames=FRAME_MAX,
-		s_frame=0
+		s_frame=0,
+		plot_type='line',
+		calc_type='standard'
 	):
+		velocity_calcs  =  {'standard':self.get_tool_velocities_standard,
+							'iou':self.get_tool_velocities_iou}
+		calc = velocity_calcs[calc_type]
 		# We have to get the velocity data
 		velocities_dict = { 'frame': [], 'velocity': [], 'class': []}
 		for tool in tools:
-			velocities = self.get_tool_velocities(tool, n_frames=s_frame+n_frames)
-			velocities = velocities[s_frame:]
+			velocities = calc(tool)
+			velocities = velocities[s_frame:s_frame+n_frames]
 
 			# Sets values of velocity dict: frames are numbered from s_frame to n_frames
-			velocities_dict['frame'] += [i for i in range(len(velocities))]
+			velocities_dict['frame'] += [i for i in range(s_frame, s_frame + len(velocities))]
 			velocities_dict['velocity'] += [v for v in velocities]
 			velocities_dict['class'] += [tool for i in range(len(velocities))]
 
 		velocities_df = pd.DataFrame(velocities_dict)
 
-		# ax = velocities_df.plot.bar(x='frame', y='velocity', color = TOOL_COLORS[tools[0]])
-		ax = velocities_df.plot.scatter(x='frame', y='velocity', c=TOOL_COLORS[tools[0]])
+		if plot_type == 'line':
+			ax = velocities_df.plot.line(x='frame', y='velocity', c=TOOL_COLORS[tools[0]], title=tools[0]+' - '+calc_type)
+		elif plot_type == 'scatter':
+			ax = velocities_df.plot.scatter(x='frame', y='velocity', c=TOOL_COLORS[tools[0]], title=tools[0]+' - '+calc_type)
+		elif plot_type == 'bar':
+			ax = velocities_df.plot.bar(x='frame', y='velocity', color = TOOL_COLORS[tools[0]], title=tools[0]+' - '+calc_type)
 
 		return ax.get_figure()
 
@@ -848,6 +959,19 @@ class IndividualFrame:
 		position = (None, None)
 		if len(relevant_tool) == 1:
 			position = relevant_tool[0].get_tool_position()
+
+		if len(relevant_tool) > 1 and self.verbose:
+			print(f"There were 2 or more instances of this tool in {self.frame_name}")
+
+		return position
+
+	"""Get position coordinates of tools"""
+	def get_standard_coordinates(self, tool):
+		relevant_tool = [i for i in self.tools if i.get_type() == tool]
+
+		position = [None,None,None,None]
+		if len(relevant_tool) == 1:
+			position = relevant_tool[0].get_standard_coordinates()
 
 		if len(relevant_tool) > 1 and self.verbose:
 			print(f"There were 2 or more instances of this tool in {self.frame_name}")
@@ -1021,5 +1145,33 @@ def get_participant_id_from_string(s):
 
 	return s
 
+"""
+Get trial image size given dataset path
+"""
+def get_trial_image_size(trial_id, datasetpath):
+	from PIL import Image
 
+	example_image = [i for i in os.listdir(datasetpath) if re.search(trial_id, i)][0]
+	img = Image.open(os.path.join(datasetpath, example_image))
+	return img.size
 
+"""
+Make a file that lists all of the frame sizes
+"""
+def make_frame_size_file(datasetpath, save_path):
+	all_trials_in_cohort = set([re.search('S[0-9]+T[0-9]+', i).group(0) for i in os.listdir(os.path.join(datasetpath, 'JPEGImages'))])
+
+	frame_sizes = { 'trial_id': [], 'w': [], 'h': [] }
+	for trial_id in all_trials_in_cohort:
+	    size_d = get_trial_image_size(
+	        trial_id = trial_id, 
+	        datasetpath = os.path.join(
+	            datasetpath,
+	            'JPEGImages'
+	        ))
+	    frame_sizes['trial_id'].append(trial_id)
+	    frame_sizes['w'].append(size_d[0])
+	    frame_sizes['h'].append(size_d[1])
+
+	fs_df = pd.DataFrame(frame_sizes)
+	fs_df.to_csv(save_path)
