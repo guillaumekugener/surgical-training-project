@@ -442,6 +442,9 @@ def extract_and_move_images(dir_with_image_zips, output_directory, trials_to_pro
 
 def create_retinanet_csv(all_objects_ds_df, dir_prefix, final_dataset_directory, csv_name, grouping):
     for g in grouping:
+        if len(grouping[g]) == 0:
+            grouping[g] = ['EMPTY']
+            
         ret_data_indicies = all_objects_ds_df['name'].str.contains('|'.join(['^' + gi for gi in grouping[g]])) 
         data_csv = all_objects_ds_df[ret_data_indicies].copy()
         data_csv['name'] = dir_prefix + data_csv['name']
@@ -851,8 +854,25 @@ def make_annotations(
             af.close()
         zf.close()
     
+"""Get the list of trials in the test split"""
+def get_trial_test_set():
+    return [
+        'S316T1', 'S316T2',
+                  'S407T2', # because we do not have many 400s
+        'S504T1',           # because we do not have many 500s
+        'S604T1', 'S604T2',
+                  'S808T2'
+    ]
 
-
+"""Get the list of trial in the validation split"""
+def get_trial_validation_set():
+    return [
+        'S306T1', 'S306T2',
+        'S407T1', 
+                  'S504T2',
+        'S612T1', 'S612T2',
+        'S807T1', 'S807T2'
+    ]
 
 
 

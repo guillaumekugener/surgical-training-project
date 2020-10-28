@@ -1,0 +1,167 @@
+---
+title: "Exploration of Model Results"
+author: "Guillaume Kugener"
+date: "7/16/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(magrittr)
+library(data.table)
+library(jpeg)
+```
+
+# Surgical Auto-Annotation Evaluation
+
+```{r}
+auto_plot_dir <- '~/Documents/USC/USC_docs/ml/surgical-training-project/data/auto-label/plots'
+```
+
+```{r}
+analysis_type <- 'validation'
+
+ground_truth <- read_csv(paste0(
+    '~/Documents/USC/USC_docs/ml/datasets/fps-1-uncropped/ImageSets/Main/retinanet_surgical_1fps_', 
+    analysis_type, 
+    '.csv'),
+  col_names=F) %>%
+  mutate(X1=gsub('(.*/)|(\\.jpeg$)', '', X1)) %>%
+  magrittr::set_colnames(c('file', 'x1', 'y1', 'x2', 'y2', 'class')) %>%
+  mutate(
+    trial=stringr::str_extract(pattern='S[0-9]+T[0-9]+[a-z]?', string=file),
+    frame=as.numeric(gsub('.*_', '', file))
+  )
+
+yolo <- read_csv(paste0(
+    '~/Documents/USC/USC_docs/ml/surgical-training-project/data/', 
+    analysis_type, 
+    '_yolo_pred_retina_style.csv'
+  )) %>%
+  mutate(frame=gsub('(.*/)|(\\.jpeg$)', '', frame)) %>%
+  mutate(
+    trial=stringr::str_extract(pattern='S[0-9]+T[0-9]+[a-z]?', string=frame),
+    frame=as.numeric(gsub('.*_', '', frame))
+  )
+
+retinanet <- read_csv(paste0(
+  '~/Documents/USC/USC_docs/ml/surgical-training-project/data/', 
+  analysis_type, 
+  '_retinanet_pred_retina_style.csv')) %>%
+  mutate(frame=gsub('(.*/)|(\\.jpeg$)', '', frame)) %>%
+  mutate(
+    trial=stringr::str_extract(pattern='S[0-9]+T[0-9]+[a-z]?', string=frame),
+    frame=as.numeric(gsub('.*_', '', frame))
+  )
+
+trials_in_all <- intersect(yolo$trial, intersect(retinanet$trial, grount_truth$trial))
+```
+
+```{r}
+yolo %>% 
+  group_by(class) %>%
+  arrange(class, -score) %>%
+  dplyr::mutate(precision=cumsum(tp)/(cumsum(tp)+cumsum(fp)), recall=cumsum(tp))
+```
+
+```{r}
+# Image sizes by trial
+image_sizes_trial <- list(
+  'height'=c(),
+  'width'=c()
+)
+for (ti in trials_in_all) {
+  example_img <- list.files('~/Documents/USC/USC_docs/ml/datasets/fps-1-uncropped/JPEGImages/', full.names = T) %>% 
+    .[grep(ti, .)] %>% head(1)
+  img_dims <- dim(readJPEG(example_img))
+  image_sizes_trial$height[ti] <- img_dims[1]
+  image_sizes_trial$width[ti] <- img_dims[2]
+}
+```
+
+```{r}
+for (to in unique(ground_truth$class)) {
+  # For plotting, we will group everything by trial, frame, class, and count (if the alg detected am object or not)
+  single_tool_only <- rbind(
+    retinanet %>% filter(class==to) %>% mutate(source='retinanet') %>% dplyr::select(-geni),
+    yolo %>% filter(class==to) %>% mutate(source='yolo') %>% dplyr::select(-geni),
+    ground_truth %>% filter(class==to) %>% mutate(score=1, source='gt', tp=1, fp=0) %>% dplyr::select(-file)
+  ) %>% filter(trial %in% trials_in_all)
+  
+  y_labels <- c('gt', 'yolo', 'retinanet')
+  single_tool_plot <- single_tool_only %>%
+    group_by(source, trial, frame, class) %>%
+    dplyr::summarise(
+      score=max(score)
+    ) %>%
+    ungroup() %>%
+    mutate(source=factor(source, levels=y_labels)) %>%
+    mutate(y=as.numeric(source))
+  
+  single_tool_out_plot <- ggplot(single_tool_plot) +
+    geom_rect(aes(xmin=frame, xmax=frame+1, ymin=y, ymax=y+1, fill=score)) +
+    ggtitle(paste0(to, ' in ', analysis_type)) +
+    scale_fill_gradient(low='white', high='red') +
+    scale_y_continuous(breaks=seq(1:length(y_labels))+0.5, labels = y_labels) +
+    facet_wrap(~trial, scales = 'free_x')
+  
+  plot(single_tool_out_plot)
+}
+```
+
+```{r}
+# Plot only the TP
+for (to in unique(ground_truth$class)) {
+  # For plotting, we will group everything by trial, frame, class, and count (if the alg detected am object or not)
+  single_tool_only <- rbind(
+    retinanet %>% filter(class==to) %>% mutate(source='retinanet') %>% dplyr::select(-geni),
+    yolo %>% filter(class==to) %>% mutate(source='yolo') %>% dplyr::select(-geni),
+    ground_truth %>% filter(class==to) %>% mutate(score=1, source='gt', tp=1, fp=0) %>% dplyr::select(-file)
+  ) %>% filter(trial %in% trials_in_all)
+  
+  y_labels <- c('gt', 'yolo', 'retinanet')
+  single_tool_plot <- single_tool_only %>%
+    filter(tp==1 | (source=='gt')) %>%
+    group_by(source, trial, frame, class) %>%
+    dplyr::summarise(
+      score=max(score)
+    ) %>%
+    ungroup() %>%
+    mutate(source=factor(source, levels=y_labels)) %>%
+    mutate(y=as.numeric(source))
+  
+  single_tool_out_plot <- ggplot(single_tool_plot) +
+    geom_rect(aes(xmin=frame, xmax=frame+1, ymin=y, ymax=y+1, fill=score)) +
+    ggtitle(paste0(to, ' in ', analysis_type)) +
+    scale_fill_gradient(low='white', high='red') +
+    scale_y_continuous(breaks=seq(1:length(y_labels))+0.5, labels = y_labels) +
+    facet_wrap(~trial, scales = 'free_x')
+  
+  plot(single_tool_out_plot)
+}
+```
+
+```{r}
+to = c('suction', 'grasper', 'muscle', 'cottonoid')
+single_tool_only <- rbind(
+  retinanet %>% filter(class %in% to) %>% mutate(source='retinanet') %>% dplyr::select(-geni),
+  yolo %>% filter(class %in% to) %>% mutate(source='yolo') %>% dplyr::select(-geni),
+  ground_truth %>% filter(class %in% to) %>% mutate(score=1, source='gt', tp=1, fp=0) %>% dplyr::select(-file)
+) %>% mutate(area=((x2-x1)/image_sizes_trial$width[trial])*((y2-y1)/image_sizes_trial$height[trial]))
+
+size_quartiles <- quantile(single_tool_only$area, c(.33, .66))  
+
+single_tool_only %>%
+  mutate(area_quartile=case_when(
+    area < size_quartiles[1] ~ 'small',
+    area < size_quartiles[2] ~ 'medium',
+    TRUE ~ 'large'
+  )) %>%
+  group_by(class, area_quartile) %>%
+  dplyr::summarise(count=n(), percent=sum(tp)/sum(tp+fp), score=mean(score)) %>%
+  arrange(-score)
+```
+
+
+

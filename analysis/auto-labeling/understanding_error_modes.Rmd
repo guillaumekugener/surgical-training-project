@@ -1,0 +1,492 @@
+---
+title: "Error Modes"
+author: "Guillaume Kugener"
+date: "10/5/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(magrittr)
+library(data.table)
+library(ggrepel)
+library(ggpubr)
+library(ggridges)
+library(ggimage)
+library(grid)
+library(jpeg)
+```
+
+```{r}
+auto_plot_dir <- '~/Documents/USC/USC_docs/ml/surgical-training-project/data/auto-label/plots'
+figures_dir <- '~/Documents/USC/USC_docs/ml/surgical-training-project/data/auto-label/figures/'
+save_location_results <- '~/Documents/USC/USC_docs/ml/surgical-training-project/data/auto-label/model_validation_data/'
+dataset_dir <- '~/Documents/USC/USC_docs/ml/datasets/fps-1-uncropped/'
+```
+
+```{r}
+# A bunch of helper functions
+prep_for_precision_recall_curve <- function(df, total_positives) {
+  precision_recall <- df %>%
+    arrange(-score) %>%
+    mutate(
+      ACC_TP = cumsum(TP),
+      ACC_FP = cumsum(FP)
+    ) %>%
+    mutate(
+      precision = ACC_TP / (ACC_TP + ACC_FP),
+      recall = ACC_TP / total_positives
+    )
+  
+  return(precision_recall)
+}
+```
+
+The purpose of this mark down is to gain an understand of where the object detection models are struggling to identify objects and when they are incorrectly classifying objects. We will then be interested in finding patterns in these frames across trials
+
+```{r}
+classes_of_interest <- c('suction', 'grasper', 'cottonoid', 'muscle', 'string')
+
+gt_results <- read_csv(
+  '~/Documents/USC/USC_docs/ml/datasets/fps-1-uncropped/ImageSets/Main/retinanet_surgical_1fps_test.csv',
+  col_names = FALSE
+) %>% magrittr::set_colnames(c('file', 'x1', 'y1', 'x2', 'y2', 'class')) %>%
+  filter(class %in% classes_of_interest)
+yolo_results <- read_csv(file.path(save_location_results, 'test_yolo_pred_retina_style.csv')) %>%
+  filter(class %in% classes_of_interest)
+retinanet_results <- read_csv(file.path(save_location_results, 'test_retinanet_pred_retina_style.csv')) %>%
+  filter(class %in% classes_of_interest)
+```
+
+```{r}
+gt_results_train <- read_csv(
+  '~/Documents/USC/USC_docs/ml/datasets/fps-1-uncropped/ImageSets/Main/retinanet_surgical_1fps_train.csv',
+  col_names = FALSE
+) %>% magrittr::set_colnames(c('file', 'x1', 'y1', 'x2', 'y2', 'class')) %>%
+  filter(class %in% classes_of_interest) 
+gt_results_validation <- read_csv(
+  '~/Documents/USC/USC_docs/ml/datasets/fps-1-uncropped/ImageSets/Main/retinanet_surgical_1fps_val.csv',
+  col_names = FALSE
+) %>% magrittr::set_colnames(c('file', 'x1', 'y1', 'x2', 'y2', 'class')) %>%
+  filter(class %in% classes_of_interest)
+
+gt_combined_all <- rbind(
+  gt_results_train,
+  gt_results_validation, 
+  gt_results
+)
+```
+
+```{r}
+test_trials_ids <- yolo_results %$%
+  frame %>%
+  stringr::str_extract(string=., pattern='S[0-9]+T[0-9]+[a-z]?') %>%
+  unique()
+```
+
+```{r}
+for_plot_decision_cutoff <- rbind(
+    yolo_results %>% 
+      mutate(source='yolo'), 
+    retinanet_results %>% 
+      mutate(source='retinanet')
+  ) %>% mutate(group=ifelse(tp==1, 'True Positive', 'False Positive'))
+
+model_conf <- ggplot(for_plot_decision_cutoff, aes(score, class, fill=group)) +
+  geom_density_ridges(alpha=0.5) +
+  xlab('Model Confidence Score') +
+  facet_wrap(~source) +
+  theme_bw() +
+  theme(
+    legend.position = 'top',
+    legend.justification = 'left'
+  )
+
+ggsave(model_conf, filename = file.path(auto_plot_dir, 'confidence_scoring_by_model.pdf'), width = 6, height = 5, units = 'in')
+```
+
+```{r}
+ds_list <- list(
+  yolo = yolo_results, 
+  retinanet = retinanet_results
+)
+```
+
+```{r}
+# Set a cutoff for object detection such that precision is above some threshold
+precision_cutoff <- 0.7
+score_cutoffs <- list()
+
+# Get the cutoff needed for each model, for each tool
+for (ds in names(ds_list)) {
+  score_cutoffs[[ds]] <- list()
+  for (to in classes_of_interest) {
+    total_positives <- gt_results %>%
+      filter(class == to) %>%
+      nrow()
+    m_t_results <- ds_list[[ds]] %>%
+      filter(class==to) %>%
+      dplyr::rename(TP=tp, FP=fp) %>%
+      prep_for_precision_recall_curve(., total_positives = total_positives)
+    
+    score_cutoffs[[ds]][[to]] <- m_t_results %>% 
+      filter(precision > precision_cutoff) %$%
+      min(score)
+  }
+}
+
+combined_valid_frames <- rbind(
+  gt_results %>%
+    mutate(frame=gsub('.*/', '', file)) %>%
+    dplyr::select(frame, x1, y1, x2, y2, class) %>%
+    mutate(tp=1, fp=0, score=1, source='gt', geni=n()),
+  yolo_results %>%
+    rowwise() %>%
+    filter(score > score_cutoffs[['yolo']][[class]]) %>%
+    mutate(source='yolo'),
+  retinanet_results %>%
+    rowwise() %>%
+    filter(score > score_cutoffs[['retinanet']][[class]]) %>%
+    mutate(source='retinanet')
+)
+
+# Positive example
+frames_both_worked <- combined_valid_frames %>%
+  group_by(source, frame) %>%
+  dplyr::summarise(ctp=sum(tp), cfp=sum(fp)) %>%
+  filter(cfp == 0) %>%
+  setDT() %>%
+  dcast(frame ~ source, value.var=c('ctp', 'cfp')) %>%
+  filter(ctp_gt == ctp_retinanet, ctp_gt == ctp_yolo) %>%
+  arrange(-ctp_gt)
+
+# Frames missed by yolo, called by retinanet
+frames_missed_yolo <- combined_valid_frames %>%
+  group_by(source, frame) %>%
+  dplyr::summarise(ctp=sum(tp), cfp=sum(fp)) %>%
+  filter(cfp == 0) %>%
+  setDT() %>%
+  dcast(frame ~ source, value.var=c('ctp', 'cfp')) %>%
+  filter(ctp_gt == ctp_retinanet, ctp_yolo < ctp_retinanet) %>%
+  arrange(-ctp_gt)
+
+# Frames missed by retinanet, called by yolo
+frames_missed_retinanet <- combined_valid_frames %>%
+  group_by(source, frame) %>%
+  dplyr::summarise(ctp=sum(tp), cfp=sum(fp)) %>%
+  filter(cfp == 0) %>%
+  setDT() %>%
+  dcast(frame ~ source, value.var=c('ctp', 'cfp')) %>%
+  filter(ctp_gt == ctp_yolo, ctp_yolo > ctp_retinanet) %>%
+  arrange(-ctp_gt)
+
+frames_missed_both <- combined_valid_frames %>%
+  group_by(source, frame) %>%
+  dplyr::summarise(ctp=sum(tp), cfp=sum(fp)) %>%
+  filter(cfp == 0) %>%
+  setDT() %>%
+  dcast(frame ~ source, value.var=c('ctp', 'cfp')) %>%
+  filter(ctp_gt > ctp_yolo, ctp_gt > ctp_retinanet) %>%
+  filter(ctp_gt <= 3) %>%
+  arrange(-ctp_gt)
+```
+
+```{r}
+plot_frame_no_annotations <- function(ex_frame) {
+  ex_img <- readJPEG(file.path(dataset_dir, 'JPEGImages', ex_frame))
+  img_size <- dim(ex_img)
+  
+  g <- rasterGrob(
+    ex_img, 
+    width=unit(1, 'npc'),
+    height=unit(1, 'npc'),
+    interpolate = FALSE)
+  
+  g1 <- ggplot() +
+    annotation_custom(g, -Inf, Inf, -Inf, Inf) +
+    ggtitle(ex_frame) +
+    scale_x_continuous(limits=c(0, img_size[2]), expand = c(0,0)) +
+    scale_y_continuous(limits=c(0, img_size[1]), expand = c(0,0)) +
+    theme(
+      legend.position = 'none', 
+      axis.ticks = element_blank(),
+      axis.text = element_blank(),
+      title = element_text(size=10)
+      # legend.justification = 'left',
+    )
+  return(g1)
+}
+```
+
+```{r}
+# Examples of tools in frames
+tool_examples <- list(
+  suction = 'S301T1_frame_00000052.jpeg',
+  grasper = 'S318T1_frame_00000095.jpeg',
+  string = 'S318T1_frame_00000112.jpeg',
+  cottonoid = 'S316T2_frame_00000231.jpeg',
+  muscle = 'S607T2_frame_00000053.jpeg' #'S401T2_frame_00000044.jpeg' 
+)
+
+individual_examples_plots <- list()
+
+for (class_type in names(tool_examples)) {
+  # class_type <- 'grasper'
+  ex_frame <- tool_examples[[class_type]]
+  ex_img <- readJPEG(file.path(dataset_dir, 'JPEGImages', ex_frame))
+  img_size <- dim(ex_img)
+  
+  # Get the object dimensions
+  cropped_dimensions <- gt_combined_all %>% 
+    filter(gsub('.*/', '', file)==ex_frame) %>%
+    filter(class==class_type)
+  
+  x1 <- cropped_dimensions$x1[1]
+  y1 <- cropped_dimensions$y1[1]
+  x2 <- cropped_dimensions$x2[1]
+  y2 <- cropped_dimensions$y2[1]
+  
+  g <- rasterGrob(
+    ex_img[y1:y2,x1:x2,1:3], 
+    width=unit(1, 'npc'),
+    height=unit(1, 'npc'),
+    interpolate = FALSE)
+  
+  g1 <- ggplot() +
+    annotation_custom(g, -Inf, Inf, -Inf, Inf) +
+    ggtitle(class_type) +
+    scale_x_continuous(limits=c(0, img_size[2]), expand = c(0,0)) +
+    scale_y_continuous(limits=c(0, img_size[1]), expand = c(0,0)) +
+    theme(
+      legend.position = 'none', 
+      axis.ticks = element_blank(),
+      axis.text = element_blank(),
+      title = element_text(size=10)
+      # legend.justification = 'left',
+  )
+  
+  individual_examples_plots[[class_type]] <- g1
+}
+
+tools_example_combined_plot <- ggarrange(
+  individual_examples_plots$cottonoid,
+  individual_examples_plots$grasper,
+  individual_examples_plots$muscle,
+  individual_examples_plots$string,
+  individual_examples_plots$suction,
+  ncol = 5, nrow = 1
+)
+
+ggsave(tools_example_combined_plot, filename = file.path(figures_dir, 'tools_examples.pdf'), height = 2, width = 8, units = 'in')
+```
+
+```{r}
+frames_examples <- list(
+  red_out_example = 'S301T1_frame_00000063.jpeg',
+  many_tools_example = 'S604T2_frame_00000100.jpeg',
+  success_example = 'S316T2_frame_00000265.jpeg',
+  active_bleeding = 'S301T1_frame_00000005.jpeg'
+)
+
+frames_plots_examples <- list()
+for (ex in names(frames_examples)) {
+  frames_plots_examples[[ex]] <- plot_frame_no_annotations(ex_frame = frames_examples[[ex]])
+}
+
+example_combined_plot <- ggarrange(
+  frames_plots_examples$many_tools_example,
+  frames_plots_examples$active_bleeding,
+  frames_plots_examples$red_out_example,
+  frames_plots_examples$success_example,
+  ncol = 2, nrow = 2
+)
+
+ggsave(example_combined_plot, filename = file.path(figures_dir, 'example_single_frames.pdf'), height = 6, width = 8, units = 'in')
+```
+
+```{r}
+plot_single_frame <- function(data, ex_frame) {
+  combined_single_frame_example <- data %>%
+    filter(frame == ex_frame)
+
+  ex_img <- readJPEG(file.path(dataset_dir, 'JPEGImages', ex_frame))
+  img_size <- dim(ex_img)
+  
+  g <- rasterGrob(
+    ex_img, 
+    width=unit(1, 'npc'),
+    height=unit(1, 'npc'),
+    interpolate = FALSE)
+  
+  g1 <- ggplot(data = combined_single_frame_example, 
+    aes(xmin=x1, xmax=x2, ymin=img_size[1] - y2, ymax=img_size[1] - y1, color=source)) +
+    annotation_custom(g, -Inf, Inf, -Inf, Inf) +
+    geom_rect(fill='transparent', size=0.5)  +
+    ggtitle(ex_frame) +
+    scale_x_continuous(limits=c(0, img_size[2]), expand = c(0,0)) +
+    scale_y_continuous(limits=c(0, img_size[1]), expand = c(0,0)) +
+    facet_wrap(~source) +
+    theme(
+      legend.position = 'none', 
+      axis.ticks = element_blank(),
+      axis.text = element_blank(),
+      title = element_text(size=10)
+      # legend.justification = 'left',
+    )
+  
+  return(g1)
+}
+
+good_detection <- plot_single_frame(
+  data = combined_valid_frames,
+  ex_frame = frames_both_worked$frame[1]
+)
+
+missed_yolo <- plot_single_frame(
+  data = combined_valid_frames,
+  ex_frame = frames_missed_yolo$frame[1]
+)
+
+missed_retinanet <- plot_single_frame(
+  data = combined_valid_frames,
+  ex_frame = frames_missed_retinanet$frame[10]
+)
+
+missed_both <- plot_single_frame(
+  data = combined_valid_frames,
+  ex_frame = frames_missed_both$frame[1]
+)
+```
+
+```{r}
+figure_comparing_outputs <- ggarrange(
+  good_detection, 
+  missed_yolo,
+  missed_retinanet,
+  missed_both,
+  nrow = 4, ncol = 1
+)
+
+ggsave(figure_comparing_outputs, filename = file.path(figures_dir, 'comparing_outputs.pdf'), width = 8, height = 8, units='in')
+```
+
+```{r}
+ex <- retinanet_results %>%
+    # filter(score > 0.25) %>%
+    filter(frame=='S612T2_frame_00000079.jpeg', class=='suction') %>%
+    mutate(source='retinanet')
+
+ggplot(data = ex %>% filter(score > 0.2), 
+  aes(xmin=x1, xmax=x2, ymin=img_size[1] - y2, ymax=img_size[1] - y1, color=source)) +
+  annotation_custom(g, -Inf, Inf, -Inf, Inf) +
+  geom_rect(fill='transparent', size=1)  +
+  scale_x_continuous(limits=c(0, img_size[2]), expand = c(0,0)) +
+  scale_y_continuous(limits=c(0, img_size[1]), expand = c(0,0))
+```
+
+```{r}
+presence_plots <- list()
+for (trial in validation_trials_ids) {
+  # Make a plot for one example trial that looks at the ground truth presence vs. yolo presence vs. retinanet presence
+
+  combined_all_sources <- rbind(
+    gt_results %>%
+      mutate(vid=stringr::str_extract(string=file, pattern='S[0-9]+T[0-9]+')) %>%
+      filter(vid == trial) %>%
+      filter(class %in% classes_of_interest) %>%
+      mutate(frame=as.numeric(gsub('(.*_)|(\\.jpeg)', '', file))) %>%
+      group_by(vid, frame, class) %>%
+      dplyr::summarise(source='gt', score=1) %>%
+      dplyr::select(vid, frame, class, source, score) %>%
+      ungroup(),
+    retinanet_results %>%
+      mutate(vid=stringr::str_extract(string=frame, pattern='S[0-9]+T[0-9]+')) %>%
+      filter(vid == trial) %>%
+      filter(class %in% classes_of_interest) %>%
+      mutate(frame=as.numeric(gsub('(.*_)|(\\.jpeg)', '', frame))) %>%
+      filter(tp == 1) %>%
+      group_by(vid, frame, class) %>%
+      dplyr::summarise(source='retinanet', score=max(score)) %>%
+      dplyr::select(vid, frame, class, source, score) %>%
+      ungroup(),
+    yolo_results %>%
+      mutate(vid=stringr::str_extract(string=frame, pattern='S[0-9]+T[0-9]+')) %>%
+      filter(vid == trial) %>%
+      filter(class %in% classes_of_interest) %>%
+      mutate(frame=as.numeric(gsub('(.*_)|(\\.jpeg)', '', frame))) %>%
+      filter(tp == 1) %>%
+      group_by(vid, frame, class) %>%
+      dplyr::summarise(source='yolo', score=max(score)) %>%
+      dplyr::select(vid, frame, class, source, score) %>%
+      ungroup()
+  )
+  
+  source_int <- setNames(1:3, c('gt', 'retinanet', 'yolo'))
+  class_int <- setNames(1:length(classes_of_interest), classes_of_interest)
+  
+  presence_plots[[trial]] <- ggplot(combined_all_sources %>% 
+      filter(score > 0.15),
+    aes(xmin=frame, xmax=frame+1, ymin=source_int[source]-0.5, ymax=source_int[source]+0.5, fill=score)) +
+    geom_rect() +
+    ggtitle(trial) +
+    scale_fill_gradient(high='red', low='white') +
+    scale_y_continuous(breaks=source_int, labels=names(source_int)) +
+    facet_wrap(~class, nrow=1) +
+    theme(
+      panel.grid = element_blank(),
+      legend.position = 'none'
+    )
+}
+```
+
+```{r}
+fig_compare_tps <- ggarrange(
+  presence_plots[[1]],
+  presence_plots[[2]],
+  presence_plots[[3]],
+  presence_plots[[4]],
+  presence_plots[[5]],
+  presence_plots[[6]],
+  presence_plots[[7]],
+  presence_plots[[8]],
+  ncol = 1
+)
+
+ggsave(fig_compare_tps, filename = file.path(auto_plot_dir, 'tps_gt_retinanet_yolo.pdf'), height = 12, width = 8, units = 'in')
+```
+
+
+```{r}
+# Identify the missed objects and plot those
+gt_distinct_objects <- gt_results %>%
+  mutate(vid=stringr::str_extract(string=file, pattern='S[0-9]+T[0-9]+')) %>%
+  filter(vid == example_trial) %>%
+  filter(class %in% classes_of_interest) %>%
+  mutate(frame=as.numeric(gsub('(.*_)|(\\.jpeg)', '', file))) %>%
+  group_by(vid, frame, class) %>%
+  dplyr::summarise(source='gt', score=1) %>%
+  dplyr::select(vid, frame, class, source, score) %>%
+  ungroup() %>%
+  mutate(id=paste0(vid, '_', frame, '_', class))
+
+retinanet_tps_distinct <- retinanet_results %>%
+  mutate(vid=stringr::str_extract(string=frame, pattern='S[0-9]+T[0-9]+')) %>%
+  filter(vid == example_trial) %>%
+  filter(class %in% classes_of_interest) %>%
+  mutate(frame=as.numeric(gsub('(.*_)|(\\.jpeg)', '', frame))) %>%
+  filter(tp == 1) %>%
+  mutate(source='retinanet') %>%
+  dplyr::select(vid, frame, class, source, score) %>%
+  mutate(id=paste0(vid, '_', frame, '_', class))
+
+missing_retinanet <- gt_distinct_objects %>%
+  filter(!(id %in% retinanet_tps_distinct$id))
+
+ggplot(missing_retinanet, aes(xmin=frame, xmax=frame+1, ymin=class_int[class]-0.5, ymax=class_int[class]+0.5)) +
+  geom_rect() +
+  scale_y_continuous(breaks = class_int, labels=names(class_int))
+```
+
+
+
