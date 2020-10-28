@@ -1,0 +1,458 @@
+---
+title: "Extracted Features and Outcomes"
+author: "Guillaume Kugener"
+date: "8/9/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(tidyverse)
+library(magrittr)
+library(data.table)
+library(ggrepel)
+library(ggpubr)
+```
+
+```{r}
+auto_label_dir <- '~/Documents/USC/USC_docs/ml/surgical-training-project/data/auto-label/'
+video_metrics <- read_csv(file.path(auto_label_dir, '/data/metrics_20201001.csv'))
+outcomes_data <- read_csv(file.path(auto_label_dir, '/data/outcomes_data_clean - complete_data_set.csv'))
+
+# Ignore any trial 3s
+video_metrics %<>% filter(!grepl('T3$', vid))
+
+trial_with_values_off <- c('S314T2')
+```
+
+```{r}
+outcomes_data %>%
+  colnames() %>%
+  write.table(., file = file.path(auto_label_dir, 'tables', 'outcomes_columns_all.tsv'), sep='\t', quote=F, row.names=F,col.names = F)
+```
+
+```{r}
+name_success <- outcomes_data %>%
+  dplyr::select(SurveyID, `Trial 1 Success`, `Trial 2 Success`) %>%
+  gather(trial, success, -SurveyID) %>%
+  mutate(name=paste0('S', SurveyID, 'T', ifelse(trial=='Trial 1 Success', '1', '2'))) %>%
+  dplyr::select(vid=name, success) %>%
+  distinct()
+
+name_tth <- outcomes_data %>%
+  dplyr::select(SurveyID, `Trial 1 TTH`, `Trial 2 TTH`) %>%
+  gather(trial, tth, -SurveyID) %>%
+  mutate(name=paste0('S', SurveyID, 'T', ifelse(trial=='Trial 1 TTH', '1', '2'))) %>%
+  dplyr::select(vid=name, tth) %>%
+  distinct()
+
+name_ebl <- outcomes_data %>%
+  dplyr::select(SurveyID, `Trial 1 EBL`, `Trial 2 EBL`) %>%
+  gather(trial, ebl, -SurveyID) %>%
+  mutate(name=paste0('S', SurveyID, 'T', ifelse(trial=='Trial 1 EBL', '1', '2'))) %>%
+  dplyr::select(vid=name, ebl) %>%
+  distinct()
+
+name_misc <- outcomes_data %>%
+  dplyr::select(SurveyID, Group) %>%
+  distinct()
+
+name_misc <- rbind(
+  name_misc %>% mutate(vid=paste0('S', SurveyID, 'T1')),
+  name_misc %>% mutate(vid=paste0('S', SurveyID, 'T2'))
+) %>% dplyr::select(vid, Group)
+```
+
+```{r}
+plot_tth_frames <- video_metrics %>%
+  left_join(., name_tth, by='vid')
+
+ggplot(plot_tth_frames, aes(tth, frames, label=vid)) +
+  geom_point() +
+  geom_label_repel(data=plot_tth_frames %>% filter(abs(tth - frames) > 50)) +
+  geom_abline(slope=1, linetype=2) +
+  xlab('TTH from Outcomes Data') + ylab('N Frames Annotated') +
+  theme_bw()
+
+plot_tth_frames %>%
+  # filter(tth < 300) %>%
+  # filter(vid != 'S314T2') %>%
+  arrange(vid) %$%
+  sqrt(mean((tth - frames)^2))
+
+
+```
+
+```{r}
+tool_plot_order <- c('suction', 'grasper', 'cottonoid', 'muscle', 'string')
+relevant_metrics_columns <- c(
+  'vid', 'frames', paste0('proportion_', seq(0,4), '_tools_in_view'), 'proportion_5+_tools_in_view',
+  paste0('proportion_', tool_plot_order)
+)
+
+metrics_plot_ready <- video_metrics %>%
+  dplyr::select(relevant_metrics_columns) %>%
+  left_join(., name_success, by='vid') %>%
+  gather(metric, value, -vid, -frames, -success) %>%
+  mutate(success=ifelse(success==1, 'Success', 'Failure')) %>%
+  mutate(gen_metric_id=ifelse(grepl('tools_in_view', metric), 'tools_in_view', 'proportion_spec'))
+```
+
+```{r}
+# Run this to ignore the trial that is tool long
+metrics_plot_ready %<>% filter(!(vid %in% trial_with_values_off))
+```
+
+```{r}
+n_trials <- metrics_plot_ready$vid %>% unique() %>% length()
+gen_metric_names <- list(
+  'tools_in_view'=list(
+    title=paste0('Proportion of frames with n tools in view (n=', n_trials, ' trials)'),
+    x_title='',
+    y_title=''
+  ),
+  'proportion_spec'=list(
+    title=paste0('Proportion of frames where tool in use (n=', n_trials, ' trials)'),
+    x_title='',
+    y_title=''
+  )
+)
+for (cl in names(gen_metric_names)) {
+  # tool proportions
+  plotting_data <- metrics_plot_ready %>% 
+    filter(gen_metric_id==cl) %>%
+    mutate(metric=gsub('(^proportion_)', '', metric)) %>%
+    mutate(metric=gsub('_tools_in_view$', ' tool(s)', metric))
+  if (cl == 'proportion_spec') {
+    plotting_data %<>% mutate(metric=factor(gsub('proportion_', '', metric), levels=tool_plot_order))
+  }
+  g1 <- ggplot(plotting_data, aes(metric, value, fill=success)) +
+    geom_boxplot() +
+    xlab(gen_metric_names[[cl]]$x_title) + ylab(gen_metric_names[[cl]]$y_title) + 
+    ggtitle(gen_metric_names[[cl]]$title) +
+    stat_compare_means(aes(group=success), label='p.format', label.y = 1.1) +
+    theme_bw() +
+    theme(
+      text = element_text(size=16),
+      title = element_text(size=16),
+      legend.title = element_blank(),
+      legend.text = element_text(size=16),
+      legend.position = 'bottom',
+      legend.justification = 'left' 
+    )
+  
+  plot(g1)
+  
+  ggsave(g1, filename = file.path(auto_label_dir, 'plots', paste0(cl, '.png')), width = 8, height = 6, device='png')
+}
+```
+
+Below, we try to predict trial success from some of the enigeered features. We varied how many frames we used to generate the features (i.e. the first n frames of the trial for different values of n)
+
+```{r}
+metrics_files_generated <- list.files(file.path(auto_label_dir, 'data')) %>% .[grep('metrics_n_frames', .)]
+metrics_files_ordered <- metrics_files_generated %>% 
+  stringr::str_extract(pattern='n_frames_[0-9]+', string=.) %>% 
+  gsub('.*_', '', .) %>%
+  as.numeric() %>%
+  order()
+
+table(metrics_plot_ready %>% distinct(vid, success) %$% success)
+
+for (f in metrics_files_generated[metrics_files_ordered]) {
+  n_frames <- as.numeric(gsub('.*_', '', stringr::str_extract(pattern='n_frames_[0-9]+', string = f)))
+  
+  single_run_metrics <- suppressMessages(read_csv(file.path(auto_label_dir, 'data', f))) %>%
+    dplyr::select(relevant_metrics_columns) %>%
+    filter(!grepl('T3$', vid)) %>%
+    left_join(., name_success, by='vid')
+  
+  
+  formula_for_prediction <- as.formula(paste0('success~', paste0('proportion_', seq(0,4), '_tools_in_view', collapse = '+')))
+  model <- glm(success ~ proportion_muscle + proportion_grasper + proportion_0_tools_in_view + proportion_3_tools_in_view, family = 'binomial', data=single_run_metrics)
+  
+  table(single_run_metrics$success)
+  summary(model)
+  
+  predictions <- predict(model, newdata = single_run_metrics, type = 'response')
+  predictions <- ifelse(predictions > 0.5, 1, 0)
+  accuracy <- length(which(predictions==single_run_metrics$success))/length(predictions) * 100
+  
+  print(paste0(n_frames, ',', accuracy))
+}
+```
+
+```{r}
+models_and_plots_tth_various_frame <- list()
+
+for (f in metrics_files_generated[metrics_files_ordered]) {
+  n_frames <- as.numeric(gsub('.*_', '', stringr::str_extract(pattern='n_frames_[0-9]+', string = f)))
+  
+  single_run_metrics <- suppressMessages(read_csv(file.path(auto_label_dir, 'data', f))) %>%
+    # dplyr::select(relevant_metrics_columns) %>%
+    left_join(., name_tth, by='vid')
+  
+  variables_for_model <- colnames(single_run_metrics) %>%
+    .[which(!(. %in% c('vid', 'frames', 'trial', 'proportion_5+_tools_in_view', 'tth')))] %>%
+    .[. %in% relevant_metrics_columns] %>%
+    paste0(collapse='+')
+  
+  formula_for_prediction <- as.formula(paste0('tth~', variables_for_model))
+  model <- lm(formula = formula_for_prediction, data=single_run_metrics)
+  
+  rsquared_calc <- summary(model)$adj.r.squared
+  
+  single_run_metrics$predictions <- predict(model, newdata = single_run_metrics)
+  
+  g1 <- ggplot(single_run_metrics, aes(tth, predictions)) +
+    geom_point() +
+    # geom_abline(slope = 1) +
+    xlab(NULL) + ylab(NULL) +
+    scale_x_continuous(limits = c(0, 300)) +
+    scale_y_continuous(limits = c(0, 300)) +
+    annotate('text', x = 300, y = 0, label = paste0('Adj. R: ', round(rsquared_calc, 3)), hjust=1, vjust=0) +
+    ggtitle(paste0('First ', n_frames, ' frames')) +
+    theme_bw()
+  
+  models_and_plots_tth_various_frame[[f]] <- list(
+    model = model,
+    plot = g1
+  )
+}
+```
+
+```{r}
+# Plot of all the EBLs
+tth_different_num_frames_fig <- ggarrange(
+  models_and_plots_tth_various_frame$metrics_n_frames_30_20201001.csv$plot,
+  models_and_plots_tth_various_frame$metrics_n_frames_45_20201001.csv$plot,
+  models_and_plots_tth_various_frame$metrics_n_frames_60_20201001.csv$plot,
+  models_and_plots_tth_various_frame$metrics_n_frames_75_20201001.csv$plot,
+  models_and_plots_tth_various_frame$metrics_n_frames_90_20201001.csv$plot,
+  models_and_plots_tth_various_frame$metrics_n_frames_105_20201001.csv$plot,
+  models_and_plots_tth_various_frame$metrics_n_frames_120_20201001.csv$plot,
+  models_and_plots_tth_various_frame$metrics_n_frames_135_20201001.csv$plot,
+  ncol = 4, nrow = 2
+)
+
+tth_predicted_n_frames <- annotate_figure(
+  tth_different_num_frames_fig,
+  bottom = text_grob('Time to Hemostasis', size=12),
+  left = text_grob('Predicted Time to Hemostasis', size=12, rot=90)
+)
+
+ggsave(tth_predicted_n_frames, filename = file.path(figures_dir, 'tth_estimated_various_n_frames.pdf'), height = 6, width = 8, units = 'in')
+```
+
+
+```{r}
+models_and_plots_ebl_various_frame <- list()
+
+for (f in metrics_files_generated[metrics_files_ordered]) {
+  n_frames <- as.numeric(gsub('.*_', '', stringr::str_extract(pattern='n_frames_[0-9]+', string = f)))
+  
+  single_run_metrics <- suppressMessages(read_csv(file.path(auto_label_dir, 'data', f))) %>%
+    # dplyr::select(relevant_metrics_columns) %>%
+    left_join(., name_ebl, by='vid')
+  
+  variables_for_model <- colnames(single_run_metrics) %>%
+    .[which(!(. %in% c('vid', 'frames', 'trial', 'proportion_5+_tools_in_view', 'ebl')))] %>%
+    .[. %in% relevant_metrics_columns] %>%
+    paste0(collapse='+')
+  
+  formula_for_prediction <- as.formula(paste0('ebl~', variables_for_model))
+  model <- lm(formula = formula_for_prediction, data=single_run_metrics)
+  
+  rsquared_calc <- summary(model)$adj.r.squared
+  
+  single_run_metrics$predictions <- predict(model, newdata = single_run_metrics)
+  
+  g1 <- ggplot(single_run_metrics, aes(ebl, predictions)) +
+    geom_point() +
+    # geom_abline(slope = 1) +
+    xlab(NULL) + ylab(NULL) +
+    scale_x_continuous(limits = c(0, 2000)) +
+    scale_y_continuous(limits = c(-25, 1100)) +
+    annotate('text', x = 2000, y = -25, label = paste0('Adj. R: ', round(rsquared_calc, 3)), hjust=1, vjust=0) +
+    ggtitle(paste0('First ', n_frames, ' frames')) +
+    theme_bw()
+  
+  models_and_plots_ebl_various_frame[[f]] <- list(
+    model = model,
+    plot = g1
+  )
+}
+```
+
+```{r}
+# Plot of all the EBLs
+ebl_different_num_frames_fig <- ggarrange(
+  models_and_plots_ebl_various_frame$metrics_n_frames_30_20201001.csv$plot,
+  models_and_plots_ebl_various_frame$metrics_n_frames_45_20201001.csv$plot,
+  models_and_plots_ebl_various_frame$metrics_n_frames_60_20201001.csv$plot,
+  models_and_plots_ebl_various_frame$metrics_n_frames_75_20201001.csv$plot,
+  models_and_plots_ebl_various_frame$metrics_n_frames_90_20201001.csv$plot,
+  models_and_plots_ebl_various_frame$metrics_n_frames_105_20201001.csv$plot,
+  models_and_plots_ebl_various_frame$metrics_n_frames_120_20201001.csv$plot,
+  models_and_plots_ebl_various_frame$metrics_n_frames_135_20201001.csv$plot,
+  ncol = 4, nrow = 2
+)
+
+ebl_predicted_n_frames <- annotate_figure(
+  ebl_different_num_frames_fig,
+  bottom = text_grob('Estimated Blood Loss', size=12),
+  left = text_grob('Predicted Estimated Blood Loss', size=12, rot=90)
+)
+
+ggsave(ebl_predicted_n_frames, filename = file.path(figures_dir, 'ebl_estimated_various_n_frames.pdf'), height = 6, width = 8, units = 'in')
+```
+
+```{r}
+# Plot correlation of ebl and number of frames
+# The plot 
+data_predict_ebl <- video_metrics %>%
+  dplyr::select(relevant_metrics_columns) %>%
+  left_join(., name_ebl, by='vid') %>%
+  left_join(., name_tth, by='vid') %>%
+  left_join(., name_misc, by='vid')
+
+data_predict_ebl %<>% filter(!(vid %in% trial_with_values_off))
+
+ggplot(data_predict_ebl, aes(tth, ebl)) +
+  geom_point() +
+  geom_smooth(method='lm')
+
+variance_explained_ebl <- NULL
+for (va_cv in setdiff(colnames(data_predict_ebl), c('vid', 'frames', 'tth', 'ebl'))) {
+  if (va_cv == "proportion_5+_tools_in_view") {
+    next()
+  }
+  ebl_pred_formula <- as.formula(paste0('ebl~tth+', va_cv))
+  ebl_prediction_model <- lm(formula = ebl_pred_formula, data = data_predict_ebl)
+  
+  coefficients(ebl_prediction_model)
+  sum_pred <- summary(ebl_prediction_model)
+  
+  af <- anova(ebl_prediction_model)
+  afss <- af$"Sum Sq"
+  
+  pval <- af[,5][2]
+  PctExp <- afss/sum(afss)*100
+  variance_explained_ebl %<>% rbind(data.frame(
+    v=va_cv, 
+    effect=sum_pred$coefficients[,1][3], 
+    pval=pval, 
+    pctexp=PctExp[2]))
+}
+
+variance_explained_ebl %<>% rbind(data.frame(v='number_of_frames', effect=sum_pred$coefficients[,1][2], pval=af[,5][1], pctexp=PctExp[1]))
+variance_explained_ebl$qval <- p.adjust(variance_explained_ebl$pval)
+
+variance_explained_ebl %>%
+  arrange(pval) %>%
+  dplyr::rename(metric=v, variance_explained=pctexp) %>%
+  mutate(variance_explained=round(variance_explained, 2)) %>%
+  mutate(effect=round(effect, 1)) %>%
+  mutate(pval=ifelse(pval < 0.001, 0.001, round(pval, 3))) %>%
+  mutate(qval=ifelse(qval < 0.001, 0.001, round(qval, 3))) %>%
+  dplyr::select(metric, effect, variance_explained, pval, qval) %>%
+  write.table(., file = file.path(auto_label_dir, 'tables', 'ebl_variance_explained.tsv'), quote = F, sep = '\t', row.names = F)
+```
+
+```{r}
+variance_explained_ebl <- NULL
+for (va_cv in setdiff(colnames(data_predict_ebl), c('vid', 'frames', 'tth', 'ebl'))) {
+  if (va_cv == "proportion_5+_tools_in_view") {
+    next()
+  }
+  abs_va_cv <- gsub('proportion_', 'absolute_', va_cv)
+  data_predict_ebl_abs <- data_predict_ebl
+  data_predict_ebl_abs[,abs_va_cv] <- data_predict_ebl[,va_cv]
+  
+  ebl_pred_formula <- as.formula(paste0('ebl~', abs_va_cv))
+  ebl_prediction_model <- lm(formula = ebl_pred_formula, data = data_predict_ebl_abs)
+  
+  summary(ebl_prediction_model)
+  
+  af <- anova(ebl_prediction_model)
+  afss <- af$"Sum Sq"
+  
+  pval <- af[,5][1]
+  PctExp <- afss/sum(afss)*100
+  variance_explained_ebl %<>% rbind(data.frame(v=abs_va_cv, pval=pval, pctexp=PctExp[1]))
+}
+
+# variance_explained_ebl %<>% rbind(data.frame(v='number_of_frames', pval=af[,5][1], pctexp=PctExp[1]))
+variance_explained_ebl$qval <- p.adjust(variance_explained_ebl$pval)
+
+variance_explained_ebl %>%
+  arrange(pval) %>%
+  dplyr::rename(metric=v, variance_explained=pctexp) %>%
+  mutate(pval=ifelse(pval < 0.001, 0.001, round(pval, 3))) %>%
+  mutate(qval=ifelse(qval < 0.001, 0.001, round(qval, 3)))
+```
+
+```{r}
+metrics_example_run <- read_csv(file.path(auto_label_dir, 'data', f)) %>%
+  filter(!grepl('T3$', vid))
+
+colnames(metrics_example_run)
+
+m_for_pca <- metrics_example_run %>%
+  dplyr::select(-frames, -trial) %>%
+  column_to_rownames(var='vid')
+
+pcaed <- prcomp(m_for_pca)
+plot_ready <- as.data.frame(pcaed$x) %>%
+  mutate(vid=row.names(.)) %>%
+  left_join(., name_success, by='vid') %>%
+  mutate(success=ifelse(success==1, 'S', 'F'))
+
+weights_pca <- pcaed$rotation %>%
+  as.data.frame() %>%
+  mutate(metric=row.names(.))
+
+weights_pca %>% 
+  dplyr::select(metric, PC=PC2) %>%
+  arrange(-abs(PC))
+
+ggplot(plot_ready, aes(PC1, PC2, color=success)) +
+  geom_point()
+```
+
+```{r}
+# https://towardsdatascience.com/random-forest-in-r-f66adf80ec9
+library(randomForest)
+```
+
+```{r}
+rf_data_in <- metrics_example_run %>% 
+  dplyr::select(-frames, -trial, -`proportion_5+_tools_in_view`) %>%
+  left_join(., name_success, by='vid') %>%
+  mutate(success=factor(success)) %>%
+  column_to_rownames(var='vid')
+
+rf <- randomForest(
+ success ~ .,
+ data=rf_data_in,
+ ntree=500,
+ mtry=2,
+ importance=T
+)
+
+rf
+
+varImpPlot(rf)
+```
+
+```{r}
+help("randomForest")
+```
+
+
+
+
+
+
+
+
