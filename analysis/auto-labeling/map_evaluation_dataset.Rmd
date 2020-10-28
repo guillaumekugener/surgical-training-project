@@ -35,15 +35,15 @@ In this report, we will plot precision vs. recall curves with the mAP annotated 
 I think a good paper to compare these results to would be this one: https://arxiv.org/abs/1802.08774. I think the overall outline of this paper is very similar to what we are doing. They report these metrics as well in their results, although they do not show the overall curves as I do here
 
 ```{r}
-classes_of_interest <- c('suction', 'grasper', 'cottonoid', 'muscle', 'string')
+classes_of_interest <- c('suction', 'grasper', 'cottonoid', 'muscle', 'string', 'drill', 'tool', 'scalpel')
 gt_results <- read_csv(
-  '~/Documents/USC/USC_docs/ml/datasets/fps-1-uncropped/ImageSets/Main/retinanet_surgical_1fps_val.csv',
+  '~/Documents/USC/USC_docs/ml/datasets/fps-1-uncropped/ImageSets/Main/retinanet_surgical_1fps_test.csv',
   col_names = FALSE
 ) %>% magrittr::set_colnames(c('file', 'x1', 'y1', 'x2', 'y2', 'class')) %>%
   filter(class %in% classes_of_interest)
-yolo_results <- read_csv(file.path(save_location_results, 'validation_yolo_pred_retina_style.csv')) %>%
+yolo_results <- read_csv(file.path(save_location_results, 'test_yolo_pred_retina_style.csv')) %>%
   filter(class %in% classes_of_interest)
-retianet_results <- read_csv(file.path(save_location_results, 'validation_retinanet_pred_retina_style.csv')) %>%
+retinanet_results <- read_csv(file.path(save_location_results, 'test_retinanet_pred_retina_style.csv')) %>%
   filter(class %in% classes_of_interest)
 ```
 
@@ -64,8 +64,26 @@ prep_for_precision_recall_curve <- function(df, total_positives) {
   return(precision_recall)
 }
 
+compute_ap <- function(recall, precision) {
+  mrec <- c(0, recall, 1)
+  mpre <- c(0, precision, 0)
+  
+  for (i in seq(length(mpre), 2, -1)) {
+    mpre[i-1] <- max(mpre[i-1], mpre[i])
+  }
+  
+  i = which(mrec[2:length(mrec)] != mrec[1:(length(mrec)-1)])
+  
+  ap = sum((mrec[i+1] - mrec[i])*mpre[i+1])
+  return(ap)
+}
+
 calculate_ap <- function(df) {
   df %<>% dplyr::select(recall, precision)
+
+  ap <- compute_ap(df$recall, df$precision)  
+  # print(ap)
+  
   blank_ap <- data.frame(
     recall=seq(0,1, 0.1),
     precision=rep(0, 11)
@@ -108,30 +126,30 @@ compute_multiple_ious <- function(df, total_positives, mean_iou_threshold=seq(0.
 ```
 
 ```{r}
-validation_trials_ids <- yolo_results %$%
+test_trial_ids <- yolo_results %$%
   frame %>%
   stringr::str_extract(string=., pattern='S[0-9]+T[0-9]+[a-z]?') %>%
   unique()
 ```
 
-## Validation set precision recall
+## test set precision recall
 
-Below is the precision recall on our validation dataset of `r length(validation_trials_ids)` trials. These trials are:
+Below is the precision recall on our test dataset of `r length(test_trial_ids)` trials. These trials are:
 
-`r  paste(validation_trials_ids, collapse=', ')`
+`r  paste(test_trial_ids, collapse=', ')`
 
 ```{r}
 ds_list <- list(
   'yolo'=yolo_results,
-  'retinanet'=retianet_results
+  'retinanet'=retinanet_results
 )
 ```
 
 ### Overall
 
 ```{r}
-validation_overall_results <- NULL
-validation_overall_map <- NULL
+test_overall_results <- NULL
+test_overall_map <- NULL
 
 for (ds in names(ds_list)) {
   total_positives <- gt_results %>%
@@ -141,12 +159,12 @@ for (ds in names(ds_list)) {
     dplyr::rename(TP=tp, FP=fp) %>%
     prep_for_precision_recall_curve(., total_positives = total_positives)
       
-  map = mean(calculate_ap(m_results))
+  map = compute_ap(precision = m_results$precision, recall = m_results$recall)
     
-  validation_overall_results %<>% rbind(m_results %>% 
+  test_overall_results %<>% rbind(m_results %>% 
       mutate(model=ds))
-  validation_overall_map %<>% rbind(data.frame(map=map, model=ds, stringsAsFactors=FALSE) %>%
-    mutate(x=max(validation_overall_results$recall), y=min(validation_overall_results$precision)))
+  test_overall_map %<>% rbind(data.frame(map=map, model=ds, stringsAsFactors=FALSE) %>%
+    mutate(x=max(test_overall_results$recall), y=min(test_overall_results$precision)))
 }
 ```
 
@@ -203,8 +221,8 @@ make_pretty_pr_curve <- function(
 
 ```{r include=TRUE}
 overall_map <- make_pretty_pr_curve(
-  results = validation_overall_results,
-  map_results = validation_overall_map,
+  results = test_overall_results,
+  map_results = test_overall_map,
   legend.position = c(1,1),
   legend.justification = c(1,1)
 )
@@ -218,9 +236,9 @@ ggsave(overall_map, filename = file.path(figures_dir, 'overall_map.pdf'), height
 
 ### By tool
 
-```{r validation}
-validation_results <- NULL
-validation_maps <- NULL
+```{r test}
+test_results <- NULL
+test_maps <- NULL
 
 for (ds in names(ds_list)) {
   for (to in classes_of_interest) {
@@ -232,14 +250,15 @@ for (ds in names(ds_list)) {
       dplyr::rename(TP=tp, FP=fp) %>%
       prep_for_precision_recall_curve(., total_positives = total_positives)
       
-    map = mean(calculate_ap(m_t_results))
+    map = compute_ap(recall = m_t_results$recall, precision = m_t_results$precision)
+    # print(map)
     
-    validation_results %<>% rbind(m_t_results %>% 
+    test_results %<>% rbind(m_t_results %>% 
         mutate(tool=to, model=ds))
-    validation_maps %<>% rbind(data.frame(map=map, class=to, model=ds, stringsAsFactors=FALSE) %>%
+    test_maps %<>% rbind(data.frame(map=map, class=to, model=ds, stringsAsFactors=FALSE) %>%
       mutate(
-        x=max((validation_results %>% filter(class==to) %$% recall)), 
-        y=min((validation_results %>% filter(class==to) %$% precision))))
+        x=max((test_results %>% filter(class==to) %$% recall)), 
+        y=min((test_results %>% filter(class==to) %$% precision))))
   }
 }
 ```
@@ -250,7 +269,11 @@ maps_tool_titles <- c(
   'grasper'='grasper', 
   'muscle'='muscle',
   'string'='string', 
-  'suction'='suction')
+  'suction'='suction',
+  'drill'='drill',
+  'tool'='tool',
+  'scalpel'='scalpel'
+)
 
 map_by_tool <- list()
 for (to in classes_of_interest) {
@@ -259,8 +282,8 @@ for (to in classes_of_interest) {
 
   
   map_by_tool[[to]] <- make_pretty_pr_curve(
-    results = validation_results %>% filter(class==to),
-    map_results = validation_maps %>% filter(class==to),
+    results = test_results %>% filter(class==to),
+    map_results = test_maps %>% filter(class==to),
     title=maps_tool_titles[to],
     legend.position = 'top',
     legend.justification = 'left',
@@ -303,8 +326,8 @@ ggsave(maps_tools_cleaned, filename = file.path(figures_dir, 'maps_by_tool.pdf')
 ### By video
 
 ```{r}
-video_validation_results <- NULL
-video_validation_maps <- NULL
+video_test_results <- NULL
+video_test_maps <- NULL
 
 for (ds in names(ds_list)) {
   videos_in_set <- ds_list[[ds]] %>% 
@@ -321,20 +344,20 @@ for (ds in names(ds_list)) {
       dplyr::rename(TP=tp, FP=fp) %>%
       prep_for_precision_recall_curve(., total_positives = total_positives)
       
-    map = mean(calculate_ap(m_v_results))
+    map = compute_ap(precision = m_v_results$precision, recall = m_v_results$recall)
     
-    video_validation_results %<>% rbind(m_v_results %>% 
+    video_test_results %<>% rbind(m_v_results %>% 
         mutate(vid=vid, model=ds))
-    video_validation_maps %<>% rbind(data.frame(map=map, vid=vid, model=ds, stringsAsFactors=FALSE) %>%
-      mutate(x=max(video_validation_results$recall), y=min(video_validation_results$precision)))
+    video_test_maps %<>% rbind(data.frame(map=map, vid=vid, model=ds, stringsAsFactors=FALSE) %>%
+      mutate(x=max(video_test_results$recall), y=min(video_test_results$precision)))
   }
 }
 ```
 
 ```{r include=TRUE, fig.height=6, fig.width=6}
-ggplot(video_validation_results, aes(recall, precision, color=model)) +
+ggplot(video_test_results, aes(recall, precision, color=model)) +
   geom_line() +
-  geom_text_repel(data=video_validation_maps, aes(x, y, label=paste0('mAP: ', round(map, 3)))) +
+  geom_text_repel(data=video_test_maps, aes(x, y, label=paste0('mAP: ', round(map, 3)))) +
   facet_wrap(~vid) +
   scale_x_continuous(limits=c(0,1)) +
   scale_y_continuous(limits=c(0,1))
@@ -393,7 +416,7 @@ ggplot(fps_30_overall_results, aes(recall, precision, color=model)) +
 
 ### By tool
 
-```{r validation}
+```{r test}
 fps_30_results <- NULL
 fps_30_maps <- NULL
 
