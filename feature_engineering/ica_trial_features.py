@@ -44,7 +44,7 @@ class ICATrialFeatures:
 		
 		na_values = {'file': 0, 'x1': 0, 'y1': 0, 'x2': 0, 'y2': 0, 'class': ''}
 
-		self.data = pd.read_csv(csv_file_name, names=['file', 'x1', 'y1', 'x2', 'y2', 'class'])
+		self.data = pd.read_csv(csv_file_name, names=['file', 'x1', 'y1', 'x2', 'y2', 'class'], engine= 'python')
 		self.data = self.data.fillna(value=na_values)
 		self.data['original_vid'] = [re.search('S[0-9]+T[0-9]+[a-z]?', i).group(0) for i in self.data['file']]
 
@@ -447,6 +447,20 @@ class VideoTrial:
 			positions.append(f.get_tool_position(tool))
 
 		return positions[:n_frames]
+	
+	"""
+	Get tool path coords
+
+	Gets a list of tool coordinates [x1,y1,x2,y2] for each frame and returns
+	them as a list
+	"""
+	def get_tool_path_coords(self, tool, n_frames=FRAME_MAX):
+		positions = []
+
+		for f in self.frames:
+			positions.append(f.get_standard_coordinates(tool))
+
+		return positions[:n_frames]
 
 	"""
 	Get tool path length
@@ -493,7 +507,7 @@ class VideoTrial:
 
 	Right velocity is None unless both points are defined
 	"""
-	def get_tool_velocities(self, tool, window_size=2, n_frames=FRAME_MAX):
+	def get_tool_velocities_standard(self, tool, window_size=2, n_frames=FRAME_MAX):
 		tool_path = self.get_tool_path(tool, n_frames=n_frames)
 
 		velocities = [None]
@@ -505,13 +519,49 @@ class VideoTrial:
 			source = vals[0]
 
 			# Since this is velocity, we will keep track of directionality
-			velocity = None
+			velocity = 0
 			if (len(vals) > 1) and (dest[0] is not None) and (source[0] is not None):
 				velocity = sqrt((dest[0]-source[0])**2 + (dest[1]-source[1])**2)/len(vals)
 			
 			velocities.append(velocity)
 
-		return velocities
+		return velocities[:n_frames]
+
+	"""
+	Get the tool velocity as an intersection over union
+	"""
+
+	def get_tool_velocities_iou(self, tool, window_size=2, n_frames=FRAME_MAX):
+		tool_path = self.get_tool_path_coords(tool, n_frames=n_frames)
+		tool_areas = self.get_area_covered_by_tool(tool, n_frames=n_frames)
+		assert len(tool_path) == len(tool_areas), "tool path and tool areas are not equal sized"
+
+		velocities = [None]
+		for pi in range(1, len(tool_path)):
+			vals = tool_path[max(0, pi-1):min(pi+window_size, len(tool_path)-1)]
+			vals = [i for i in vals if i is not None]
+
+			areas = tool_areas[max(0, pi-1):min(pi+window_size, len(tool_path)-1)]
+			areas = [i for i in areas if i is not None]
+
+			dest = vals[-1]
+			source = vals[0]
+			dest_area = areas[-1]
+			source_area = areas[0]
+
+			# Since this is velocity, we will keep track of directionality
+			iou_velocity = 0
+			if (len(vals) > 1) and (dest[0] is not None) and (source[0] is not None):
+				intersection = overlap_area(dest, source)
+				if (intersection != None):
+					union = dest_area + source_area - intersection
+					iou = intersection/union
+					iou_velocity = 1/iou
+
+			
+			velocities.append(iou_velocity)
+
+		return velocities[:n_frames]
 
 	"""
 	Get area covered by tool
@@ -570,7 +620,7 @@ class VideoTrial:
 		for tool in tools:
 			features_dict['position_' + tool] = self.get_tool_path(tool, n_frames=n_frames)
 			features_dict['area_covered_' + tool] = self.get_area_covered_by_tool(tool, n_frames=n_frames)
-			features_dict['velocity_' + tool] = self.get_tool_velocities(tool, n_frames=n_frames)
+			features_dict['velocity_' + tool] = self.get_tool_velocities_standard(tool, n_frames=n_frames)
 
 		# Combination tool features
 		for t1 in tools:
@@ -724,6 +774,45 @@ class VideoTrial:
 
 		return fig
 
+	"""
+	Plot tool velocity over all frames
+
+	Plots the velocity measured at the center of each tool across all 
+ 	frames
+	"""
+	def plot_tool_velocities(
+		self, 
+		tools=[],
+		n_frames=FRAME_MAX,
+		s_frame=0,
+		plot_type='line',
+		calc_type='standard'
+	):
+		velocity_calcs  =  {'standard':self.get_tool_velocities_standard,
+							'iou':self.get_tool_velocities_iou}
+		calc = velocity_calcs[calc_type]
+		# We have to get the velocity data
+		velocities_dict = { 'frame': [], 'velocity': [], 'class': []}
+		for tool in tools:
+			velocities = calc(tool)
+			velocities = velocities[s_frame:s_frame+n_frames]
+
+			# Sets values of velocity dict: frames are numbered from s_frame to n_frames
+			velocities_dict['frame'] += [i for i in range(s_frame, s_frame + len(velocities))]
+			velocities_dict['velocity'] += [v for v in velocities]
+			velocities_dict['class'] += [tool for i in range(len(velocities))]
+
+		velocities_df = pd.DataFrame(velocities_dict)
+
+		if plot_type == 'line':
+			ax = velocities_df.plot.line(x='frame', y='velocity', c=TOOL_COLORS[tools[0]], title=tools[0]+' - '+calc_type)
+		elif plot_type == 'scatter':
+			ax = velocities_df.plot.scatter(x='frame', y='velocity', c=TOOL_COLORS[tools[0]], title=tools[0]+' - '+calc_type)
+		elif plot_type == 'bar':
+			ax = velocities_df.plot.bar(x='frame', y='velocity', color = TOOL_COLORS[tools[0]], title=tools[0]+' - '+calc_type)
+
+		return ax.get_figure()
+
 	"""Get n tools in view across frames"""
 	def get_n_tools_in_view(self, ignore=[], n_frames=FRAME_MAX, s_frame=0):
 		n_tools_in_view = []
@@ -870,6 +959,19 @@ class IndividualFrame:
 		position = (None, None)
 		if len(relevant_tool) == 1:
 			position = relevant_tool[0].get_tool_position()
+
+		if len(relevant_tool) > 1 and self.verbose:
+			print(f"There were 2 or more instances of this tool in {self.frame_name}")
+
+		return position
+
+	"""Get position coordinates of tools"""
+	def get_standard_coordinates(self, tool):
+		relevant_tool = [i for i in self.tools if i.get_type() == tool]
+
+		position = [None,None,None,None]
+		if len(relevant_tool) == 1:
+			position = relevant_tool[0].get_standard_coordinates()
 
 		if len(relevant_tool) > 1 and self.verbose:
 			print(f"There were 2 or more instances of this tool in {self.frame_name}")
