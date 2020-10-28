@@ -37,7 +37,7 @@ def make_df_of_detected_objects(data, video_id, video_start_id, classes_map, min
     y2 = []
     scores = []
     classes = []
-    for fi, f in tqdm.tqdm(enumerate(data)):
+    for fi, f in enumerate(data):
         # Each frame
         # All the elements have the same length and we are going to generate a pandas df
         for bi in range(f[3][0]): 
@@ -550,3 +550,36 @@ def label_tp_fp_in_output(output_df, gt_df, iou_threshold=0.5):
     output_df['TP'] = [1 if i == 'TP' else 0 for i in row_match_type]
     output_df['FP'] = [1 if i == 'FP' else 0 for i in row_match_type]
     return output_df   
+
+"""
+apply_nms_on_outputs
+
+Apply the NMS function on the output from an object detector. The columns of the object
+detector have to be frame, class, x1, y1, x2, y2
+We should probably do this before we run the evaluation (might improve our precision)
+"""
+def apply_nms_on_outputs(results, nms_thresh=0.5):
+    # results = pd.read_csv(file_path, names = [])
+    import tensorflow as tf
+
+    master_index = pd.Index([])
+    for f in set(results['path']):
+        for c in set(results['class']):
+            data = results[(results['path'] == f) & (results['class']==c)]
+            if data.shape[0] == 0:
+                continue
+
+            boxes = data[['x1', 'y1', 'x2', 'y2']]
+            scores = data['score']
+            scores_i = np.reshape(scores, data.shape[0])
+            
+            selected_indices = tf.image.non_max_suppression(
+                boxes, scores_i, 
+                100, 
+                iou_threshold=0.5
+            )
+
+            res = data.iloc[selected_indices.numpy()]
+            master_index = master_index.union(res.index)
+
+    return results.loc[master_index].reset_index(drop=True)
