@@ -223,8 +223,14 @@ make_pretty_pr_curve <- function(
 overall_map <- make_pretty_pr_curve(
   results = test_overall_results,
   map_results = test_overall_map,
-  legend.position = c(1,1),
-  legend.justification = c(1,1)
+  legend.position = 'top',
+  legend.justification = 'left',
+  legend.direction = 'vertical',
+  # ytext = ytext,
+  xlabel = NULL,
+  ylabel = NULL,
+  text.size = 10,
+  model_clean_names = c('yolo'='Y', 'retinanet'='R')
 )
 
 overall_map
@@ -265,14 +271,14 @@ for (ds in names(ds_list)) {
 
 ```{r include=TRUE}
 maps_tool_titles <- c(
-  'cottonoid'='cottonoid', 
-  'grasper'='grasper', 
-  'muscle'='muscle',
-  'string'='string', 
-  'suction'='suction',
-  'drill'='drill',
-  'tool'='tool',
-  'scalpel'='scalpel'
+  'cottonoid'='Cottonoid', 
+  'grasper'='Grasper', 
+  'muscle'='Muscle',
+  'string'='String', 
+  'suction'='Suction',
+  'drill'='Drill',
+  'tool'='Tool',
+  'scalpel'='Scalpel'
 )
 
 map_by_tool <- list()
@@ -284,7 +290,7 @@ for (to in classes_of_interest) {
   map_by_tool[[to]] <- make_pretty_pr_curve(
     results = test_results %>% filter(class==to),
     map_results = test_maps %>% filter(class==to),
-    title=maps_tool_titles[to],
+    # title=maps_tool_titles[to],
     legend.position = 'top',
     legend.justification = 'left',
     legend.direction = 'vertical',
@@ -300,12 +306,13 @@ for (to in classes_of_interest) {
 ```{r}
 # Make a grid of the results above
 maps_by_tools <- ggarrange(
-  map_by_tool$cottonoid,
-  map_by_tool$grasper,
-  map_by_tool$muscle,
-  map_by_tool$string,
-  map_by_tool$suction,
-  ncol = 5, nrow = 1,
+  gridExtra::grid.arrange(overall_map, top = 'Overall'), 
+  gridExtra::grid.arrange(map_by_tool$suction, top = 'Suction'),
+  gridExtra::grid.arrange(map_by_tool$grasper, top = 'Grasper'),
+  gridExtra::grid.arrange(map_by_tool$string, top = 'String'),
+  gridExtra::grid.arrange(map_by_tool$cottonoid, top = 'Cottonoid'),
+  gridExtra::grid.arrange(map_by_tool$muscle, top = 'Muscle'),
+  ncol = 6, nrow = 1,
   widths = c(1, 1, 1, 1, 1)
   
 )
@@ -320,7 +327,7 @@ maps_tools_cleaned
 ```
 
 ```{r}
-ggsave(maps_tools_cleaned, filename = file.path(figures_dir, 'maps_by_tool.pdf'), height = 3, width = 8, units='in')
+ggsave(maps_tools_cleaned, filename = file.path(figures_dir, 'maps_by_tool.pdf'), height = 3, width = 9, units='in')
 ```
 
 ### By video
