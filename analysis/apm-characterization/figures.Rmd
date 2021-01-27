@@ -1,0 +1,188 @@
+---
+title: "APM Manuscript Figures"
+author: "Guillaume Kugener"
+date: "1/24/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(ggrepel)
+library(ggpubr)
+library(ggridges)
+library(ggimage)
+library(grid)
+library(jpeg)
+```
+
+```{r}
+gt_dataset_dir <- '~/Documents/USC/USC_docs/ml/datasets/fps-1-uncropped/'
+```
+
+```{r}
+# Plotting function
+plot_single_frame <- function(data, ex_frame, title='', dataset_dir='') {
+  combined_single_frame_example <- data %>%
+    filter(frame == ex_frame)
+  
+  ex_img <- readJPEG(file.path(dataset_dir, 'JPEGImages', ex_frame))
+  img_size <- dim(ex_img)
+  
+  g <- rasterGrob(
+    ex_img, 
+    width=unit(1, 'npc'),
+    height=unit(1, 'npc'),
+    interpolate = FALSE)
+  
+  g1 <- ggplot(data = combined_single_frame_example, 
+               aes(xmin=x1, xmax=x2, ymin=img_size[1] - y2, ymax=img_size[1] - y1)) +
+    annotation_custom(g, -Inf, Inf, -Inf, Inf) +
+    geom_rect(fill='transparent', color='red', size=0.5)  +
+    geom_text(aes(x=x1, y=img_size[1] - y1, label=tool), hjust=0, vjust=0, color='white') +
+    ggtitle(title) +
+    scale_x_continuous(limits=c(0, img_size[2]), expand = c(0,0)) +
+    scale_y_continuous(limits=c(0, img_size[1]), expand = c(0,0)) +
+    # facet_wrap(~source) +
+    theme(
+      legend.position = 'none', 
+      axis.ticks = element_blank(),
+      axis.text = element_blank(),
+      title = element_text(size=10)
+      # legend.justification = 'left',
+    )
+  
+  return(g1)
+}
+```
+
+```{r}
+outcomes <- read_tsv('~/Documents/USC/USC_docs/ml/surgical-training-project/data/carotid_outcomes/complete_data_set.tsv')
+
+training_successes <- outcomes %>% filter(`Trial 1 Success` == 0, `Trial 2 Success` == 1) %$% SurveyID
+pros <- outcomes %>% filter(`Trial 1 Success` == 1, `Trial 2 Success` == 1) %$% SurveyID
+
+outcomes_relevant <- outcomes %>% 
+  dplyr::select(
+    SurveyID,
+    Group, endolast12mo, cadaverlast12,
+    `Trial 1 TTH`, `Trial 2 TTH`, `Trial 1 Success`, `Trial 2 Success`, 
+    `Trial 1 EBL`=`trial 1 ebl`, `Trial 2 EBL`=`trial 2 ebl`) %>%
+  gather(variable, value, -endolast12mo, -cadaverlast12, -Group, -SurveyID) %>%
+  mutate(trial=stringr::str_extract(pattern='Trial [0-9]', string=variable)) %>%
+  mutate(variable_name=gsub('.* ', '', variable)) %>%
+  mutate(trial_id=paste0('S', SurveyID, 'T', stringr::str_extract(pattern='[0-9]', string=trial))) %>%
+  dcast(trial_id + Group + endolast12mo + cadaverlast12 ~ variable_name, value.var='value')
+```
+
+# Figure 1
+
+Figure 1: 2 panels, panel 1 a screengrab of like our OG Carotid slide deck master slide where theres a bunch of tools annotated. I have an image but its very low res. Panel 2 is the one which plots position (x,y) color coded by tool, showing a general clustering. Just one example of the clustering I think is useful information to demonstrate that this is interesting
+
+```{r}
+# Example frame with 4+ tools
+gt_results <- read_csv('~/Documents/USC/USC_docs/ml/datasets/fps-1-uncropped/ImageSets/Main/retinanet_surgical_1fps_complete.csv',
+  col_names = c('file', 'x1', 'y1', 'x2', 'y2', 'tool')) %>%
+  mutate(short_file_name=gsub('.*/', '', file)) %>%
+  mutate(trial_id=gsub('[a-z]?_.*', '', short_file_name)) %>%
+  mutate(frame=as.numeric(stringr::str_extract(pattern='[0-9]+', string=gsub('.*_', '', short_file_name))))
+```
+
+```{r eval=FALSE}
+# Look for frames
+gt_results %>%
+  filter(tool %in% c('suction', 'cottonoid', 'grasper', 'muscle')) %>%
+  group_by(frame) %>%
+  dplyr::summarise(count=n()) %>%
+  filter(count > 3) %>%
+  arrange(-count) %>%
+  mutate(code=paste0('cp ', frame, ' ~/Downloads/good_examples/')) %>%
+  dplyr::select(code) %>%
+  write.table(.,file = '~/Documents/USC/USC_docs/ml/datasets/fps-1-uncropped/JPEGImages/move_good_images.sh', col.names = F,quote = F,row.names = F)
+```
+
+```{r}
+# Example frame
+# example_frame <- 'S302T1_frame_00000071.jpeg'
+example_frame <- 'S304T2_frame_00000028.jpeg'
+
+example_frame_plot <- plot_single_frame(
+  data = gt_results %>% mutate(frame=short_file_name), 
+  ex_frame = example_frame,
+  dataset_dir = gt_dataset_dir
+)
+
+ggsave(
+  example_frame_plot + xlab('') + ylab(''),
+  filename = '~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/apm-characterization/plots/example_frame.pdf',
+  units = 'in', width = 10, height = 5.6)
+```
+
+```{r}
+# "Clustering" for the tool use
+trial_example <- '304'
+
+clustering_plot_data <- gt_results %>%
+  filter(trial_id %in% c(rescues_t1, rescues_t2)) %>%
+  # filter(trial %in% paste0('S', trial_example, 'T', c(1,2))) %>%
+  mutate(frame_int=as.numeric(gsub('\\.jpeg', '', gsub('.*_', '', frame)))) %>%
+  mutate(xc=(x1+x2)/2, yc=(y1+y2)/2) %>%
+  filter(!is.na(tool)) %>%
+  filter(tool %in% c('suction', 'cottonoid', 'grasper', 'muscle'))
+
+clustering_plot_data %>%
+  filter(trial_id == 'S309T2') %>%
+  arrange(tool)
+
+for (t1 in rescues_t1) {
+  plot_data_c <- clustering_plot_data %>% 
+    filter(trial_id %in% c(t1, gsub('T1', 'T2', t1))) %>%
+    arrange(frame)
+  
+  if (nrow(plot_data_c) == 0) {
+    next()
+  }
+  
+  g1 <- ggplot(plot_data_c, aes(xc, yc, color=tool)) +
+    geom_point() +
+    ggtitle(paste0('Participant: ', gsub('S|T[12]', '', t1))) +
+    facet_wrap(~trial_id) +
+    theme(legend.position = 'top', legend.justification = 'left')
+  
+  ggsave(
+    g1, 
+    filename = file.path(
+      '~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/apm-characterization/plots/fvs_density/', 
+      paste0(gsub('S|T[12]', '', t1), '.pdf')), 
+    units = 'in', width=6, height = 4)
+}
+
+```
+
+Figure 2: I dont know how to best represent this i could use some input on a good visual representation of tool-usage metrics. I thought about the horizontal bar graphs you made before which doucment tool usage, but I wanted something to compare successful and unsuccessful trials
+
+```{r}
+# Suctions only
+suctions_only <- gt_results %>%
+  filter(tool=='muscle') %>%
+  left_join(., outcomes_relevant, by='trial_id')
+
+single_df_suction_plot_ready <- suctions_only %>%
+  group_by(trial_id) %>%
+  mutate(r=rank(frame))
+
+ggplot(single_df_suction_plot_ready, aes(frame, r, color=Success, group=trial_id)) +
+  geom_step() +
+  xlim(c(0,120)) +
+  ylim(c(0, 120))
+```
+
+Figure 3) 4 scatterplots (each its own panel). Total disappearances ~ EBL; Suction disappearances ~ ebl; grasper disappearances~ebl; cottonoid~EBL
+
+```{r}
+
+```
+
