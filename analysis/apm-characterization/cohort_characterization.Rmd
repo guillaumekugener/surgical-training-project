@@ -1,667 +1,15 @@
 ---
-title: "Cohort Characterization with APMs"
+title: "Cohort Characterization"
 author: "Guillaume Kugener"
-date: "`r Sys.Date()`"
+date: "1/26/2021"
 output: html_document
 ---
 
-```{r setup, include=FALSE}
+```{r include=FALSE}
 knitr::opts_chunk$set(echo = FALSE)
-library(tidyverse)
-library(magrittr)
-library(ggrepel)
-library(reshape2)
-library(DT)
 ```
 
-```{r}
-plot_dir <- '~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/apm-characterization/plots/'
-```
-
-# Cohort Characterization with APMs
-
-In a previous manuscript, we characterized similarities and differences in the demographics of participants as they managed an ICA injury simulation. In this document, we want to characterize differences in successful and unsuccessful trials using APMs dervied from the videos. Specifically, these APMs are derived from annotations of these videos at 1 fps.
-
-```{r include=FALSE}
-# Frame dimensions
-frame_dimensions <- read_csv('~/Documents/USC/USC_docs/ml/datasets/fps-1-uncropped/image_sizes.csv')
-
-dimensions_grouping <- frame_dimensions %>%
-  mutate(gname=paste0(w, 'x', h))
-
-dg1920x1080 <- dimensions_grouping %>% filter(gname=='1920x1080') %$% trial_id
-dg1280x720 <- dimensions_grouping %>% filter(gname=='1280x720') %$% trial_id
-```
-
-```{r include=FALSE}
-# Load ground truth 1 fps data
-gt_fps1 <- read_csv('~/Documents/USC/USC_docs/ml/datasets/fps-1-uncropped/ImageSets/Main/retinanet_surgical_1fps_complete.csv',
-  col_names = c('file', 'x1', 'y1', 'x2', 'y2', 'tool')) %>%
-  mutate(short_file_name=gsub('.*/', '', file)) %>%
-  mutate(trial_id=gsub('[a-z]?_.*', '', short_file_name)) %>%
-  mutate(frame=as.numeric(stringr::str_extract(pattern='[0-9]+', string=gsub('.*_', '', short_file_name))))
-
-# batching_corrections <- gt_fps1 %>%
-  # group_by()
-
-# xs_mean <- mean(c(gt_fps1$x1, gt_fps1$x2), na.rm = T)
-# xs_sd <- sd(c(gt_fps1$x1, gt_fps1$x2), na.rm = T)
-# ys_mean <- mean(c(gt_fps1$y1, gt_fps1$y2), na.rm = T)
-# ys_sd <- sd(c(gt_fps1$y1, gt_fps1$y2), na.rm = T)
-
-gt_fps1 %<>%
-  mutate(res=case_when(
-    trial_id %in% dg1280x720 ~ '1280x720',
-    trial_id %in% dg1920x1080 ~ '1920x1080',
-    TRUE ~ 'None'
-  )) %>%
-  group_by(res) %>%
-# Scale the 1980x1080 to same values as the 1280x720
-  # mutate(
-  #   x1=ifelse(trial_id %in% dg1920x1080, x1/1080*720, x1),
-  #   y1=ifelse(trial_id %in% dg1920x1080, y1/1920*1280, y1),
-  #   x2=ifelse(trial_id %in% dg1920x1080, x2/1080*720, x2),
-  #   y2=ifelse(trial_id %in% dg1920x1080, y2/1920*1280, y2)
-  # ) %>%
-  # Z-score (mean center) the x1, y1, x2, y2 values? Then we do not have to normalize by wxh
-  # Then we use that z-score to determine where the the point would be on a 1920x1080 image 
-  mutate(
-    z_x1=(x1-mean(x1, na.rm=T))/sd(x1, na.rm=T),
-    z_y1=(y1-mean(y1, na.rm=T))/sd(y1, na.rm=T),
-    z_x2=(x2-mean(x2, na.rm=T))/sd(x2, na.rm=T),
-    z_y2=(y2-mean(y2, na.rm=T))/sd(y2, na.rm=T)
-  ) %>%
-  ungroup()
-
-# Keep only the five most relevant tools
-tools_of_interest <- c('suction', 'grasper', 'cottonoid', 'string', 'muscle')
-
-# Will need to calculate proportions
-total_frames_by_trial <- gt_fps1 %>%
-  group_by(trial_id) %>%
-  dplyr::summarise(total=length(unique(short_file_name)))
-
-# Outcomes data
-outcomes <- read_tsv('~/Documents/USC/USC_docs/ml/surgical-training-project/data/carotid_outcomes/complete_data_set.tsv')
-
-training_successes <- outcomes %>% filter(`Trial 1 Success` == 0, `Trial 2 Success` == 1) %$% SurveyID
-pros <- outcomes %>% filter(`Trial 1 Success` == 1, `Trial 2 Success` == 1) %$% SurveyID
-
-outcomes_relevant <- outcomes %>% 
-  dplyr::select(
-    SurveyID,
-    Group, endolast12mo, cadaverlast12,
-    `Trial 1 TTH`, `Trial 2 TTH`, `Trial 1 Success`, `Trial 2 Success`) %>%
-  gather(variable, value, -endolast12mo, -cadaverlast12, -Group, -SurveyID) %>%
-  mutate(trial=stringr::str_extract(pattern='Trial [0-9]', string=variable)) %>%
-  mutate(variable_name=gsub('.* ', '', variable)) %>%
-  mutate(trial_id=paste0('S', SurveyID, 'T', stringr::str_extract(pattern='[0-9]', string=trial))) %>%
-  dcast(trial_id + Group + endolast12mo + cadaverlast12 ~ variable_name, value.var='value')
-
-unpaired_t1s <- c('S320T1', 'S310T1', 'S506T1', 'S314T1')
-trials_to_ignore <- c('S314T2') # Ignoring this one because it is annotated far beyond TTH
-```
-
-```{r eval=FALSE}
-ggplot(gt_fps1 %>% 
-    filter(tool=='suction') %>%
-    mutate(dim=case_when(trial_id %in% dg1280x720 ~ '1280x720', 
-      trial_id %in% dg1920x1080 ~ '1980x1080',
-      TRUE ~ 'None')), aes(x2)) +
-  geom_density() +
-  facet_wrap(~dim, scales = 'free')
-```
-
-```{r}
-apms_dataframe <- total_frames_by_trial %>%
-  filter(!(trial_id %in% trials_to_ignore)) %>%
-  left_join(., frame_dimensions %>% dplyr::select(trial_id, w, h), by = 'trial_id') %>%
-  left_join(.,outcomes_relevant, by = 'trial_id')
-
-apms_dataframe %<>% filter(!is.na(Success))
-```
-
-Below is a plot of the TTH from the outcomes data and the total frames annotated. There are some inconsistencies that we will want to make sure to address. In this analysis I am currently ignoring the following trials: `r paste0(trials_to_ignore, collapse=', ')`
-
-```{r}
-totals_v_tth <- total_frames_by_trial %>%
-  left_join(., frame_dimensions %>% dplyr::select(trial_id, w, h), by = 'trial_id') %>%
-  left_join(.,outcomes_relevant, by = 'trial_id')
-
-ggplot(totals_v_tth, aes(TTH, total)) +
-  geom_point() +
-  geom_text_repel(data=totals_v_tth %>% filter(abs(TTH-total) > 50), aes(label=trial_id))
-```
-
-The APMs used in this analysis are:
-
-* Proportion of frames each tool is used in a trial (# of frames with tool/# frames in trial). Set to 0 if a tool is not used.
-
-```{r}
-# Frames each tool used
-apms_dataframe %<>% left_join(
-  ., 
-  gt_fps1 %>%
-    filter(tool %in% tools_of_interest) %>%
-    group_by(trial_id, tool) %>%
-    dplyr::summarise(count=length(unique(short_file_name))) %>%
-    ungroup() %>%
-    dplyr::mutate(tool=paste0('frames_with_', tool)) %>%
-    dcast(trial_id ~ tool, value.var='count'),
-  by = 'trial_id'
-)
-```
-
-* Proportion of frames with 0, 1, 2, ... tools in view (# of frames with n tools/# frames in trial).
-```{r}
-# Frames 0, 1, 2, 3, 4+ tools in view
-n_tools_in_view_ds <- gt_fps1 %>%
-  filter(tool %in% tools_of_interest) %>%
-  group_by(trial_id, short_file_name) %>%
-  dplyr::summarise(n_tools=length(unique(tool))) %>%
-  ungroup() %>%
-  group_by(trial_id, n_tools) %>%
-  dplyr::summarise(count=n()) %>%
-  dplyr::mutate(n_tools=paste0('frames_with_', n_tools, '_tool(s)_in_view')) %>%
-  dcast(trial_id ~ n_tools, value.var='count')
-
-# Add the column for frames with at least one tool in view
-n_tools_in_view_ds[,'frames_with_at_least_1_tool_in_view'] <- apply(n_tools_in_view_ds[,colnames(n_tools_in_view_ds)[grep('frames_with_[0-9]+_.*', colnames(n_tools_in_view_ds))]], 1, FUN = function(x) sum(x[!is.na(x)]))
-
-
-apms_dataframe %<>% left_join(.,
-  n_tools_in_view_ds,
-  by = 'trial_id') %>%
-  mutate(frames_with_0_tools_in_view=total-frames_with_at_least_1_tool_in_view)
-```
-
-* First frame that each tool appears in during the trial. If a tool does not appear in the trial, this feature is set to the length of the trial.
-```{r}
-# First frame that each tool appears
-apms_dataframe %<>% left_join(.,
-  gt_fps1 %>%
-    filter(tool %in% tools_of_interest) %>%
-    group_by(trial_id, tool) %>%
-    dplyr::summarise(first_appear=min(frame)) %>%
-    ungroup() %>%
-    mutate(tool=paste0('first_frame_appear_', tool)) %>%
-    dcast(trial_id ~ tool, value.var='first_appear'),
-  by = 'trial_id')
-```
-
-* Number of in 'n' outs (renamed "tool exchanges"). This APM is calculated for each tool where we count the number of times a tool comes in and then out of screen. This is normalized by the total number of frames in the trial, so the feature can be interpretted as the number of in n outs / frame. Set to 0 if a tool is not used
-```{r}
-# Number of in n outs
-# From https://stackoverflow.com/questions/16324897/finding-groups-of-contiguous-numbers-in-a-list
-calc_in_n_outs <- function(x) {
-  if (length(x) <= 1) {
-    return(length(x))
-  }
-  
-  x <- x[order(x)]
-  
-  ins <- c(1, which(diff(x) != 1 & diff(x) != 0) + 1)
-  outs <- c(ins - 1, length(x)) 
-  ranges <- (paste0(x[ins], '-', x[outs]))
-  
-  return(ranges)
-}
-
-apms_dataframe %<>% left_join(.,
-  gt_fps1 %>%
-    filter(tool %in% tools_of_interest) %>%
-    group_by(trial_id, tool) %>%
-    dplyr::summarise(in_n_outs=length(calc_in_n_outs(frame))) %>%
-    ungroup() %>%
-    mutate(tool=paste0('n_in_n_outs_', tool)) %>%
-    dcast(trial_id ~ tool, value.var='in_n_outs'),
-  by = 'trial_id')
-
-apms_dataframe[,'total_in_n_outs'] <- apms_dataframe %>% 
-  .[,grep('n_in_n_outs_', colnames(.))] %>%
-  apply(., 1, FUN = function(x) sum(x, na.rm = T))
-```
-
-```{r eval=FALSE}
-# In n outs in the first 30 seconds
-first_30_seconds_exchanges <- gt_fps1 %>%
-  filter(tool %in% tools_of_interest) %>%
-  filter(frame < 60) %>%
-  group_by(trial_id, tool) %>%
-  dplyr::summarise(in_n_outs=length(calc_in_n_outs(frame))) %>%
-  ungroup() %>%
-  mutate(tool=paste0('n_in_n_outs_', tool)) %>%
-  dcast(trial_id ~ tool, value.var='in_n_outs')
-
-first_30_seconds_exchanges[,'first_30s_total_in_n_outs'] <- first_30_seconds_exchanges %>% 
-  .[,grep('n_in_n_outs_', colnames(.))] %>%
-  apply(., 1, FUN = function(x) sum(x, na.rm = T))
-
-apms_dataframe %<>% left_join(., 
-  first_30_seconds_exchanges[,c('trial_id', 'first_30s_total_in_n_outs')],
-  by = 'trial_id'
-)
-```
-
-```{r include=FALSE, eval=FALSE}
-# * Time to 10 tool exchanges. How many seconds it took before a surgeon had 10 tool exchanges in a trial
-
-time_to_n_exchanges <- function(data, n) {
-  # Get ranges of each tool
-  ranges_all <- c()
-  for (to in unique(data$tool)) {
-    ranges <- data %>%
-      filter(tool==to) %$%
-      calc_in_n_outs(frame)
-    
-    ranges_all <- c(ranges_all, ranges)
-  }
-  
-  ranges_all <- ranges_all[order(as.numeric(gsub('\\-.*', '', ranges_all)))]
-
-  res <- NA
-  if (length(ranges_all) >= n) {
-    r <- ranges_all[n]
-    res <- as.numeric(stringr::str_extract(pattern = '^[0-9]+', string=r))
-  }
-  
-  out <- data.frame(trial_id=unique(data$trial_id), res=res)
-  out %<>% magrittr::set_colnames(c('trial_id', paste0('time_to_', n, '_exchanges')))
-  return(out)
-}
-
-n_value <- 5
-
-apms_dataframe %<>% left_join(.,
-  gt_fps1 %>%
-    filter(tool %in% tools_of_interest) %>%
-    filter(tool == 'suction') %>%
-    group_by(trial_id) %>%
-    dplyr::do(time_to_n_exchanges(data=., n=n_value)),
-  by = 'trial_id')
-```
-
-```{r eval=FALSE}
-suction_only_fps1 <- gt_fps1 %>% 
-  filter(tool=='suction') %>% 
-  group_by(trial_id, tool) %>%
-  dplyr::summarise(in_n_outs=length(calc_in_n_outs(frame, tool=unique(tool)))) %>%
-  filter(trial_id %in% c('S306T1', 'S306T2', 'S611T1', 'S609T2'))
-
-suction_only_fps10 <- read_csv('~/Documents/USC/USC_docs/ml/datasets/fps-10-uncropped/ImageSets/Main/retinanet_surgical_10fps_complete.csv',
-    col_names = c('file', 'x1', 'y1', 'x2', 'y2', 'tool')) %>%
-  mutate(short_file_name=gsub('.*/', '', file)) %>%
-  mutate(trial_id=gsub('[a-z]?_.*', '', short_file_name)) %>%
-  mutate(frame=as.numeric(stringr::str_extract(pattern='[0-9]+', string=gsub('.*_', '', short_file_name)))) %>% 
-  filter(tool=='suction') %>% 
-  group_by(trial_id, tool) %>%
-  dplyr::summarise(in_n_outs=length(calc_in_n_outs(frame, tool=unique(tool)))) %>%
-  filter(trial_id %in% c('S306T1', 'S306T2', 'S611T1', 'S609T2'))
-
-suction_only_fps30 <- read_csv('~/Documents/USC/USC_docs/ml/datasets/fps-30-uncropped/ImageSets/Main/local_retinanet_style.csv',
-    col_names = c('file', 'x1', 'y1', 'x2', 'y2', 'tool')) %>%
-  mutate(short_file_name=gsub('.*/', '', file)) %>%
-  mutate(trial_id=gsub('[a-z]?_.*', '', short_file_name)) %>%
-  mutate(frame=as.numeric(stringr::str_extract(pattern='[0-9]+', string=gsub('.*_', '', short_file_name)))) %>% 
-  filter(tool=='suction') %>% 
-  group_by(trial_id, tool) %>%
-  dplyr::summarise(in_n_outs=length(calc_in_n_outs(frame, tool=unique(tool)))) %>%
-  filter(trial_id %in% c('S306T1', 'S306T2', 'S611T1', 'S609T2'))
-
-combined_inouts_fps <- suction_only_fps1 %>%
-  dplyr::select(trial_id, fps1=in_n_outs) %>%
-  left_join(., suction_only_fps10 %>% dplyr::select(trial_id, fps10=in_n_outs), by='trial_id') %>%
-  left_join(., suction_only_fps30 %>% dplyr::select(trial_id, fps30=in_n_outs), by='trial_id')
-
-combined_inouts_fps
-```
-
-* Area covered by each tool. This APM is calculated by summing the area of the bounding boxes for a tool in each frame and dividing it by the total number of frames in the trial.  
-```{r}
-area_data <- gt_fps1 %>%
-  # mutate(area = (y2-y1)*(x2-x1)) %>%
-  mutate(area = ifelse(is.na(y2) | is.na(x2-x1), 0, (y2-y1)*(x2-x1))) %>%
-  filter(tool %in% tools_of_interest) %>%
-  # to z-score
-  # group_by(tool, res) %>%
-  # mutate(area=(area- mean(area, na.rm=T))/sd(area, na.rm=T)) %>%
-  # ungroup() %>%
-  group_by(trial_id, tool) %>%
-  dplyr::summarise(area_covered=sum(area)) %>%
-  ungroup() %>%
-  mutate(tool=paste0('area_covered_', tool)) %>%
-  dcast(trial_id ~ tool, value.var='area_covered')
-
-# Total area covered by boxes (needs to be normalized to the size of the frame)
-apms_dataframe %<>% left_join(., 
-  area_data,
-  by = 'trial_id')
-
-# Normalize area by the size of the frame and the total number of frames
-apms_dataframe[,colnames(apms_dataframe)[grep('area_covered_', colnames(apms_dataframe))]] <- apms_dataframe[,colnames(apms_dataframe)[grep('area_covered_', colnames(apms_dataframe))]]/(apms_dataframe$w * apms_dataframe$h)/apms_dataframe$total
-```
-
-```{r}
-# For PCA
-pca_area <- apms_dataframe %>%
-  dplyr::select(c('trial_id', colnames(.)[grep('area', colnames(.))])) %>%
-  # filter(trial_id %in% (apms_dataframe %>% filter(Success == 1) %$% trial_id)) %>%
-  .[complete.cases(.),] %>%
-  as.data.frame()
-
-row.names(pca_area) <- pca_area$trial_id
-pca_area$trial_id <- NULL
-
-pca_area_res <- prcomp(pca_area)
-pca_area_plot <- pca_area_res$x %>%
-  as.data.frame() %>%
-  mutate(trial_id=row.names(.)) %>%
-  left_join(., apms_dataframe %>% dplyr::select(trial_id, total, Success), by='trial_id') %>%
-  left_join(., frame_dimensions, by='trial_id') %>%
-  mutate(res=paste0(w, 'x', h)) %>%
-  filter(!is.na(Success)) %>%
-  mutate(Success=paste0('Success: ', Success))
-
-# pca_plot %$%
-  # t.test(PC1[which(res == '1920x1080')], PC1[which(res != '1920x1080')])
-
-ggplot(pca_area_plot, aes(PC1, PC2, color=res)) +
-  geom_point() +
-  facet_wrap(~Success) +
-  theme(legend.position = 'top')
-```
-
-* Standard of deviation of each of the coordinates for each tool. Also of the center x and center y.
-```{r include=FALSE}
-sd_data <- gt_fps1 %>%
-  dplyr::select(-res) %>%
-  filter(tool %in% tools_of_interest) %>%
-  left_join(., frame_dimensions %>% dplyr::select(trial_id, w, h), by='trial_id') %>%
-  mutate(x1=x1/w, y1=y1/h, x2=x2/w, y2=y2/h) %>% # Normalized by w x h
-  # mutate(cx=(x1+x2)/2, cy=(y1+y2)/2) %>%
-  # mutate(center_single_point=sqrt(cx^2+cy^2)) %>%
-  gather(variable, value, -file, -tool, -short_file_name, -trial_id, -frame, -w, -h) %>%
-  group_by(trial_id, tool, variable) %>%
-  dplyr::summarise(
-    sd=sd(value)
-  ) %>%
-  ungroup() %>%
-  mutate(tool=paste0('sd_', variable, '_', tool)) %>%
-  dcast(trial_id ~ tool, value.var='sd')
-
-apms_dataframe %<>% left_join(., 
-  sd_data,
-  by = 'trial_id')
-```
-
-PCA plot to see if there are any batch effects when in the standard deviations based on resolution
-
-```{r}
-# For PCA
-pca_sd <- sd_data %>%
-  dplyr::select(c('trial_id', colnames(.)[grep('sd_[xy]', colnames(.))])) %>%
-  # filter(trial_id %in% (apms_dataframe %>% filter(Success == 1) %$% trial_id)) %>%
-  .[complete.cases(.),]
-
-row.names(pca_sd) <- pca_sd$trial_id
-pca_sd$trial_id <- NULL
-
-pca_res <- prcomp(pca_sd)
-pca_plot <- pca_res$x %>%
-  as.data.frame() %>%
-  mutate(trial_id=row.names(.)) %>%
-  left_join(., apms_dataframe %>% dplyr::select(trial_id, total, Success), by='trial_id') %>%
-  left_join(., frame_dimensions, by='trial_id') %>%
-  mutate(res=paste0(w, 'x', h)) %>%
-  filter(!is.na(Success)) %>%
-  mutate(Success=paste0('Success: ', Success))
-
-# pca_plot %$%
-  # t.test(PC1[which(res == '1920x1080')], PC1[which(res != '1920x1080')])
-
-ggplot(pca_plot, aes(PC1, PC2, color=res)) +
-  geom_point() +
-  facet_wrap(~Success) +
-  theme(legend.position = 'top')
-```
-
-* Distance traveled by each tool. Calculated from the top of the tool box if tool is suction or grasper and center of the box for muscle and cottonoid
-* Tool speed - takes the distance traveled and divides by the total number of frames the tool is present
-
-```{r}
-# Distance traveled by each tool
-get_dist_tool <- function(tid, to, normalize=F) {
-  # Get all frames with that tool
-  # tid = 'S301T1'
-  # to = 'suction'
-  relevant_frames <- gt_fps1 %>% filter(trial_id == tid, tool == to)
-  total_frames <- total_frames_by_trial %>% filter(trial_id == tid) %$% total[1]
-  
-  frame_coordinates_all <- data.frame(frame=seq(1, total_frames)) %>%
-    left_join(., relevant_frames %>% 
-        dplyr::select(frame, tool, x1, x2, y1, y2) %>%
-        mutate(x=(x1+x2)/2, y = ifelse(tool %in% c('suction', 'grasper'), y1, (y1+y2)/2)) %>%
-        dplyr::select(frame, tool, x, y), by = 'frame')
-  
-  # Have to normalize
-  w <- frame_dimensions %>% filter(trial_id == tid) %$% w
-  h <- frame_dimensions %>% filter(trial_id == tid) %$% h
-  
-  x1 <- frame_coordinates_all$x %>% .[1:length(.)-1]/w
-  x2 <- frame_coordinates_all$x %>% .[2:length(.)]/w
-  
-  y1 <- frame_coordinates_all$y %>% .[1:length(.)-1] /h
-  y2 <- frame_coordinates_all$y %>% .[2:length(.)] /h
-  
-  distance_covered <- sqrt((x2-x1)^2 + (y2-y1)^2)
-  
-  # Normalize by total frames present (giving us speed)
-  if (normalize) {
-    distance_covered <- distance_covered/length(which(!is.na(distance_covered)))
-  }
-  
-  return(sum(distance_covered, na.rm=T))
-}
-
-distance_covered_apm <- gt_fps1 %>%
-  left_join(., frame_dimensions, by='trial_id') %>%
-  filter(tool %in% tools_of_interest) %>% 
-  distinct(trial_id, tool) %>%
-  group_by(trial_id, tool) %>%
-  mutate(distance_covered=get_dist_tool(tid=trial_id, to=tool)) %>%
-  ungroup() %>%
-  mutate(tool=paste0('distance_covered_', tool)) %>%
-  dcast(trial_id ~ tool, value.var='distance_covered')
-
-distance_covered_normalized_apm <- gt_fps1 %>%
-  # dplyr::select(-x1, -y1, -x2, -y2) %>%
-  # dplyr::rename(x1=z_x1, x2=z_x2, y1=z_y1, y2=z_y2) %>%
-  filter(tool %in% tools_of_interest) %>% 
-  distinct(trial_id, tool) %>%
-  group_by(trial_id, tool) %>%
-  mutate(distance_covered=get_dist_tool(tid=trial_id, to=tool, normalize = T)) %>%
-  ungroup() %>%
-  mutate(tool=paste0('tool_speed_', tool)) %>%
-  dcast(trial_id ~ tool, value.var='distance_covered')
-
-apms_dataframe %<>% left_join(., distance_covered_apm, by = 'trial_id')
-apms_dataframe %<>% left_join(., distance_covered_normalized_apm, by = 'trial_id')
-```
-
-Looking for potential batch effects in how distance traveled is calculated (by resolution). Done using PCA and looking at PC1 and PC2
-
-```{r}
-# Looking at potential batch effects in Area
-pca_dist <- distance_covered_apm %>%
-  dplyr::select(c('trial_id', colnames(.)[grep('distance', colnames(.))])) %>%
-  # filter(trial_id %in% (apms_dataframe %>% filter(Success == 1) %$% trial_id)) %>%
-  .[complete.cases(.),]
-
-row.names(pca_dist) <- pca_dist$trial_id
-pca_dist$trial_id <- NULL
-
-pca_dist_res <- prcomp(pca_dist)
-pca_dist_plot <- pca_dist_res$x %>%
-  as.data.frame() %>%
-  mutate(trial_id=row.names(.)) %>%
-  left_join(., apms_dataframe %>% dplyr::select(trial_id, total, Success), by='trial_id') %>%
-  left_join(., frame_dimensions, by='trial_id') %>%
-  mutate(res=paste0(w, 'x', h)) %>%
-  filter(!is.na(Success)) %>%
-  mutate(Success=paste0('Success: ', Success))
-
-ggplot(pca_dist_plot, aes(PC1, PC2, color=res)) +
-  geom_point() +
-  facet_wrap(~Success) +
-  theme(legend.position = 'top')
-```
-
-* Overlap of tools. Number of frames where two tools overlap by greater than > x using IoU. Doing this for suction + cottonoid and grasper + muscle
-
-```{r}
-# Need function that looks for the overlap of two boxes (Aoverlap/ A1 +A2 - Aoverlap)
-intersection_over_union <- function(b1, b2) {
-  if (is.na(b1[1]) | is.na(b2[1])) {
-    return(0)
-  }
-  
-  b1 <- as.numeric(b1)
-  b2 <- as.numeric(b2)
-  
-  x1 <- max(b1[1], b2[1])
-  y1 <- max(b1[2], b2[2])
-  x2 <- min(b1[3], b2[3])
-  y2 <- min(b1[4], b2[4])
-  
-  if ((x2 < x1) | (y2 < y1)) {
-    return(0)
-  }
-  
-  a1 <- (b1[3] - b1[1]) * (b1[4] - b1[2])
-  a2 <- (b2[3] - b2[1]) * (b2[4] - b2[2])
-  
-  # A overlap
-  ao = (x2 - x1) * (y2 - y1)
-  
-  return(ao/(a1 + a2 - ao))
-}
-
-# Suction + cottonoid
-frames_with_tools <- list()
-for (to in c('suction', 'grasper', 'cottonoid', 'muscle')) {
-  frames_with_tools[[to]] <- suction_frames <- gt_fps1 %>%
-    filter(tool==to) %>%
-    left_join(., frame_dimensions %>% dplyr::select(trial_id, w, h), by='trial_id') %>%
-    # mutate(x1=x1/w, y1=y1/h, x2=x2/w, y2=y2/h) %>%
-    dplyr::select(trial_id, frame, x1, y1, x2, y2)
-}
-
-# Sincle data frame
-combined_suction_cottonoids <- merge(
-  frames_with_tools$suction %>% 
-    dplyr::rename(t1_x1=x1, t1_y1=y1, t1_x2=x2, t1_y2=y2), 
-  frames_with_tools$cottonoid %>% 
-    dplyr::rename(t2_x1=x1, t2_y1=y1, t2_x2=x2, t2_y2=y2), 
-  by=c('trial_id', 'frame')
-) %>% filter(!is.na(t1_x1) & !is.na(t2_x1))
-
-combined_grasper_muscle <- merge(
-  frames_with_tools$grasper %>% 
-    dplyr::rename(t1_x1=x1, t1_y1=y1, t1_x2=x2, t1_y2=y2), 
-  frames_with_tools$muscle %>% 
-    dplyr::rename(t2_x1=x1, t2_y1=y1, t2_x2=x2, t2_y2=y2), 
-  by=c('trial_id', 'frame')
-) %>% filter(!is.na(t1_x1) & !is.na(t2_x1))
-
-sc_areas <- apply(combined_suction_cottonoids, 1, FUN = function(x) {
-  intersection_over_union(
-    c(x[['t1_x1']], x[['t1_y1']], x[['t1_x2']], x[['t1_y2']]),
-    c(x[['t2_x1']], x[['t2_y1']], x[['t2_x2']], x[['t2_y2']])
-  )
-})
-
-gm_areas <- apply(combined_grasper_muscle, 1, FUN = function(x) {
-  intersection_over_union(
-    c(x[['t1_x1']], x[['t1_y1']], x[['t1_x2']], x[['t1_y2']]),
-    c(x[['t2_x1']], x[['t2_y1']], x[['t2_x2']], x[['t2_y2']])
-  )
-})
-
-combined_suction_cottonoids[,'overlap'] <- sc_areas
-combined_grasper_muscle[,'overlap'] <- gm_areas
-
-# Overlap threshold
-sc_overlap <- 0.15
-gm_overlap <- 0.05
-
-apms_dataframe %<>% left_join(.,  
-  combined_suction_cottonoids %>%
-    filter(overlap > sc_overlap) %>%
-    group_by(trial_id) %>%
-    dplyr::summarise(overlap_sc=n()),
-  by='trial_id') %>% 
-  mutate(overlap_sc=overlap_sc/total) %>%
-  mutate(got_to_sc_step=ifelse(overlap_sc > 0, 1, 0))
-
-apms_dataframe %<>% left_join(.,  
-  combined_grasper_muscle %>%
-    filter(overlap > gm_overlap) %>%
-    group_by(trial_id) %>%
-    dplyr::summarise(overlap_gm=n()),
-  by='trial_id') %>% 
-  mutate(overlap_gm=overlap_gm/total) %>%
-  mutate(got_to_gm_step=ifelse(overlap_gm > 0, 1, 0))
-# 
-# # Success examples
-# success <- apms_dataframe %>% filter(Success==1) %$% trial_id[1:10]
-# 
-# ggplot(combined_grasper_muscle %>% filter(trial_id %in% success[3]), aes(frame, overlap)) +
-#   geom_point()
-```
-
-```{r eval=FALSE}
-# * % dwell time in each quadrant. For each tool, what % of time of the trial is spent in each quadrant
-gt_fps1 %>%
-  filter(tool %in% tools_of_interest) %>%
-  left_join(., frame_dimensions %>% dplyr::select(trial_id, w, h)) %>%
-  # mutate(x1=x1/w, y1=y1/h, x2=x2/w, y2=y2/h) %>%
-  mutate(cx=(x1+x2)/2, cy=(y1+y2)/2) %>%
-  mutate(quadrant=case_when(
-    (cx < 0.5 & cy < 0.5) ~ 'TL',
-    (cx < 0.5 & cy >= 0.5) ~ 'BL',
-    (cx > 0.5 & cy < 0.5) ~ 'TR',
-    (cx > 0.5 & cy >= 0.5) ~ 'BR',
-    TRUE ~ 'None'
-  )) %>%
-  group_by(trial_id, tool, quadrant) %>%
-  dplyr::summarise(
-    count=n()
-  ) %>%
-  ungroup() %>%
-  mutate(tool=paste0('quadrant_', quadrant, '_', tool)) %>%
-  dcast(trial_id ~ tool, value.var='count')
-```
-
-```{r}
-# Replace NAs with 0s
-apms_dataframe %<>% filter(trial_id != 'S608T3')
-
-# Not for except for first frame, where if it is NA we will replace with the length of the trial
-apms_dataframe[,c('total', colnames(apms_dataframe)[grep('^first_frame_', colnames(apms_dataframe))])] %<>%
-  apply(., 1, FUN = function(x) { ifelse(is.na(x), x[['total']], x)}) %>% t()
-
-
-# summary(apms_dataframe)
-# apms_dataframe[is.na(apms_dataframe)] <- 0
-apms_dataframe[, grep('^(frames|overlap|got_to|distance|n_in_n_outs)_', colnames(apms_dataframe))] %<>% 
-  apply(., 1, FUN = function(x) ifelse(is.na(x), 0, x)) %>%
-  t()
-
-# Normalize by total number of frames
-apms_dataframe[,grep('^frames_', colnames(apms_dataframe))] <- apms_dataframe[,grep('^frames_', colnames(apms_dataframe))]/apms_dataframe$total
-# Quadrant dwell time - need to figure out how to normalize (or else just becomes a proxy for tool use)
-# apms_dataframe[,grep('^quadrant_', colnames(apms_dataframe))] <- apms_dataframe[,grep('^quadrant_', colnames(apms_dataframe))]/apms_dataframe$total
-# apms_dataframe[,grep('^n_in_n_outs', colnames(apms_dataframe))] <- apms_dataframe[,grep('^n_in_n_outs', colnames(apms_dataframe))]/apms_dataframe$total
+```{r child =  'apm_generation.Rmd'}
 ```
 
 ## Looking at potential batch effects
@@ -1068,6 +416,155 @@ a_v_r_t2 %>%
 a_v_r_t2 %>%
   DT::datatable(options=list(scrollX=TRUE))
 ```
+
+## APMs vs. EBL
+
+We are also interested in seeing which APMs are correlated with EBL. Below is a simple pearson correlation between each APM calculated and EBL reported for that trial
+
+```{r}
+apms_ebl_correlation <- apms_dataframe %>%
+  mutate(Group=ifelse(Group=='Attending', 1, 0)) %>%
+  gather(variable, value, -trial_id, -total, -w, -h, -Success, -TTH, -EBL) %>%
+  # filter(variable=='Group') %>%
+  group_by(variable) %>%
+  dplyr::summarise(
+    cor=cor.test(value, EBL)$estimate,
+    p=cor.test(value, EBL)$p.value
+  )
+
+apms_ebl_correlation %>%
+  arrange(p) %>%
+  mutate(cor=round(cor, 3)) %>%
+  mutate(p=format(p, digits=3)) %>%
+  datatable(options=list(scrollX=TRUE))
+```
+
+```{r}
+require(ggarrange)
+require(ggpubr)
+# Figures for EBL vs. APMs
+disappearances_total_ebl <- ggplot(apms_dataframe, aes(total_in_n_outs, EBL)) +
+  geom_point() +
+  geom_smooth(method='lm')
+
+disappearances_suction_ebl <- ggplot(apms_dataframe, aes(n_in_n_outs_suction, EBL)) +
+  geom_point() +
+  geom_smooth(method='lm')
+
+disappearances_grasper_ebl <- ggplot(apms_dataframe, aes(n_in_n_outs_grasper, EBL)) +
+  geom_point() +
+  geom_smooth(method='lm')
+
+cottonoid_ebl<- ggplot(apms_dataframe, aes(frames_with_cottonoid, EBL)) +
+  geom_point() +
+  geom_smooth(method='lm')
+
+ggpubr::ggarrange(
+  disappearances_total_ebl, disappearances_suction_ebl,
+  disappearances_grasper_ebl, cottonoid_ebl, 
+  ncol = 2, nrow = 2
+)
+```
+
+```{r}
+require(Metrics)
+
+# Tool proportions model trained on full video predict blood loss on different # of frames
+proportion_of_tool_use_frames <- colnames(apms_dataframe) %>% 
+  .[grep('^frames_with_(suction|cottonoid|grasper|muscle|string)$', .)] %>%
+  gsub('tool\\(s\\)', 'tools', .)
+
+ebl_prediction_formula <- as.formula(paste0('EBL~', paste0(proportion_of_tool_use_frames, collapse = '+')))
+
+ebl_predict_df <- apms_dataframe %>%
+  magrittr::set_colnames(gsub('tool\\(s\\)', 'tools', colnames(.))) %>%
+  dplyr::select(c('trial_id', 'EBL', proportion_of_tool_use_frames))
+
+# Remove any rows with NAs
+ebl_predict_df <- ebl_predict_df[complete.cases(ebl_predict_df),]
+
+# test set
+test_ids <- apms_dataframe %>%
+  distinct(trial_id, Success) %>%
+  mutate(group=gsub('[0-9]T.*', '', trial_id)) %>%
+  group_by(group, Success) %>%
+  dplyr::mutate(count=n()) %>%
+  filter(group %in% c('S31', 'S40')) %$%
+  trial_id
+
+train_ids <- setdiff(apms_dataframe$trial_id, test_ids)
+
+lm_predict_blood_loss <- lm(ebl_prediction_formula, data = ebl_predict_df %>% filter(trial_id %in% train_ids))
+
+# RMSE and R2 from predictions
+ebl_predictions_lm <- ebl_predict_df %>%
+  filter(trial_id %in% test_ids)
+
+ebl_predictions_lm$prediction <- predict(lm_predict_blood_loss, newdata = ebl_predictions_lm)
+```
+
+Predicted EBL vs. actual EBL on the test set of trials (trial IDs 31X and 40X). Training was done with `r length(train_ids)` trials. Variables are the proportion of tool use in the trial
+
+```{r}
+# Result plotted
+ggplot(ebl_predictions_lm, aes(EBL, prediction)) +
+  geom_point() +
+  geom_abline(slope = 1, linetype=2) +
+  annotate(
+    'text', x = 0, y = max(ebl_predictions_lm$prediction),
+    label=paste0('RMSE: ', round(rmse(predicted = ebl_predictions_lm$prediction, actual = ebl_predictions_lm$EBL), 3)),
+    hjust=0, vjust=1
+  ) + annotate(
+    'text', x = 0, y = max(ebl_predictions_lm$prediction)-50, 
+    label=paste0('Adj. R2: ', round(summary(lm_predict_blood_loss)$adj.r.squared, 3)),
+    hjust=0, vjust=1
+  ) + theme_bw()
+```
+
+Predicting EBL using the proportion of tool use looking at the first n frames using the model trained above.
+
+```{r}
+# Now need to make loop that gets data for the first n frames
+apms_first_n_frames <- NULL
+for (n_frames in seq(15, 135, 15)) {
+  apms_clean_df <- apms_dataframe %>%
+    dplyr::select(trial_id, total, EBL)
+  
+  # Frames each tool used
+  apms_clean_df %<>% left_join(
+    ., 
+    gt_fps1 %>%
+      filter(frame <= n_frames) %>%
+      filter(tool %in% tools_of_interest) %>%
+      group_by(trial_id, tool) %>%
+      dplyr::summarise(count=length(unique(short_file_name))/n_frames) %>%
+      ungroup() %>%
+      dplyr::mutate(tool=paste0('frames_with_', tool)) %>%
+      dcast(trial_id ~ tool, value.var='count'),
+    by = 'trial_id')
+    
+    apms_clean_df[is.na(apms_clean_df)] <- 0 # If NA, set to 0
+  
+    # Now run the prediction on all the data
+    apms_clean_df$predicted_ebl <- predict(lm_predict_blood_loss, newdata = apms_clean_df)
+    apms_clean_df$first_n_frames <- n_frames
+    
+    apms_first_n_frames %<>% rbind(apms_clean_df)
+}
+
+rmse_first_n_frames <- apms_first_n_frames %>%
+  group_by(first_n_frames) %>%
+  dplyr::summarise(rmse=rmse(predicted = predicted_ebl, actual=EBL))
+```
+
+```{r}
+ggplot(apms_first_n_frames, aes(EBL, predicted_ebl)) +
+  geom_point() +
+  geom_text(data=rmse_first_n_frames, aes(x=0, y=max(apms_first_n_frames$predicted_ebl), label=round(rmse, 3)), hjust=0, vjust=0) +
+  facet_wrap(~first_n_frames) +
+  theme_bw()
+```
+
 
 ## Success vs. Failure Visualizations
 
