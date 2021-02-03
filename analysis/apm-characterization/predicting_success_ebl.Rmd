@@ -172,29 +172,24 @@ resamples(models) %>% summary( metric = "Accuracy")
 
 ## Predicting EBL
 
+### From 1 FPS APMs
+
 ```{r}
 # Create our training and test splits (ground truth data)
 ebl.train.data <- apms_fixed_c_names %>%
   mutate(EBL=log2(EBL)) %>%
   filter(trial_id %in% training_set) %>%
-  dplyr::select(c('EBL', 'total', 'Group', 'endolast12mo', 'cadaverlast12', columns_to_use)) %>%
-  dplyr::select(-frames_with_5_tools_in_view)
+  # dplyr::select(c('EBL', 'total', 'Group', 'endolast12mo', 'cadaverlast12', 'resolution', columns_to_use[1:11])) %>%
+  dplyr::select(c('EBL', 'total', 'Group', 'endolast12mo', 'cadaverlast12', 'resolution', columns_to_include))
 
 ebl.test.data <- apms_fixed_c_names %>% 
   mutate(EBL=log2(EBL)) %>%
   filter(trial_id %in% prediction_test_set) %>%
-  dplyr::select(c('EBL', 'total', 'Group', 'endolast12mo', 'cadaverlast12', columns_to_use)) %>%
-  dplyr::select(-frames_with_5_tools_in_view)
+  # dplyr::select(c('EBL', 'total', 'Group', 'endolast12mo', 'cadaverlast12', 'resolution', columns_to_use[1:11])) %>%
+  dplyr::select(c('EBL', 'total', 'Group', 'endolast12mo', 'cadaverlast12', 'resolution', columns_to_include))
 
 ebl_accuracies_on_test <- NULL
 predictions_ebl <- NULL
-
-cor(ebl.test.data$total, ebl.test.data$EBL)
-```
-
-```{r}
-# We are also interested to see how our models perform using the output from the 30 fps detections
-
 ```
 
 ```{r}
@@ -276,26 +271,7 @@ ebl_accuracies_on_test %<>% rbind(data.frame(
 ```
 
 ```{r}
-svm.fit <- train(
-  EBL ~., data = ebl.train.data, method = "svmRadial",
-  trControl = trainControl("cv", number = 10),
-  preProcess = c("center", "scale"),
-  tuneLength = 10
-  )
-
-# Make predictions
-predictions <- svm.fit %>% predict(ebl.test.data)
-
-# Model prediction performance
-ebl_accuracies_on_test %<>% rbind(data.frame(
-  model = 'svm',
-  RMSE = RMSE(predictions, ebl.test.data$EBL),
-  Rsquare = R2(predictions, ebl.test.data$EBL)
-))
-```
-
-```{r}
-models <- list(lm.basic = lm.fit, ridge = ridge, lasso = lasso, elastic = elastic, svm = svm.fit)
+models <- list(lm.basic = lm.fit, ridge = ridge, lasso = lasso, elastic = elastic)
 resamples(models) %>% summary( metric = "RMSE")
 
 # Combine coefficents into data frame
@@ -334,27 +310,34 @@ coef_df %<>%
 
 ```{r}
 g2 <- ggplot(predictions_ebl, aes(EBL, pred, color=model)) +
-  geom_point() +
+  geom_point(size=2) +
   geom_abline(slope=1, linetype=2) +
-  xlab('Actual EBL') + ylab('Predicted EBL') + 
-  stat_cor(method = "pearson", label.x = 5, label.y = 10) +
+  xlab('Actual log2(EBL)') + ylab('Predicted log2(EBL)') + 
+  stat_cor(method = "pearson", label.x = 6, label.y = 10) +
   facet_wrap(~model) +
   theme_bw() + 
   theme(
-    legend.position='none'
+    legend.position='none',
+    text = element_text(size=16),
+    axis.text = element_text(size=16),
+    axis.title = element_text(size=16)
   )
 
 g2
+
+# ggsave(g2, filename=file.path(plot_dir, 'predicted_ebl_apms_30_fps_detection.pdf'), units='in', height=4, width = 6)
 
 ggplot(predictions_ebl, aes(EBL, abs(pred-EBL))) +
   geom_point() +
   facet_wrap(~model) + 
   theme_bw()
+```
 
+```{r}
 ggsave(g2, filename = file.path(plot_dir, 'predicted_ebl_actual_models.pdf'), width = 6, height = 6, units='in')
 ```
 
-```{r fig.height=8}
+```{r}
 g1 <- ggplot(coef_df %>% 
       left_join(., ebl_accuracies_on_test, by='model') %>%
       mutate(model_name=paste0(model, ' RMSE: ', round(RMSE, 2))), 
@@ -369,6 +352,251 @@ g1 <- ggplot(coef_df %>%
     legend.justification = 'left',
     legend.direction = 'vertical'
   )
+
+g1
+
+ggsave(g1, filename = file.path(plot_dir, 'predict_ebl_models.pdf'), width = 10, height = 12, units='in')
+```
+
+### From 30 FPS Detection Data
+
+```{r}
+# Compare 1 fps proportion of tool use data to 30 fps proportion of tool use
+frame_columns <- colnames(apms_dataframe) %>% .[11:length(.)]
+
+combined_1_30_apms <- apms_dataframe %>%
+  dplyr::select(c('trial_id', frame_columns)) %>%
+  magrittr::set_colnames(paste0('fps1_', colnames(.))) %>%
+  dplyr::rename(trial_id=fps1_trial_id) %>%
+  left_join(.,
+    apms_30_fps_dataframe %>%
+      dplyr::select(c('trial_id', frame_columns)) %>%
+      magrittr::set_colnames(paste0('fps30_', colnames(.))) %>%
+      dplyr::rename(trial_id=fps30_trial_id),
+    by = 'trial_id'
+  ) %>%
+  gather(variable, value, -trial_id) %>%
+  mutate(fr=gsub('_.*', '', variable)) %>%
+  mutate(variable=gsub('fps[0-9]+_', '', variable)) %>%
+  reshape2::dcast(trial_id + variable ~ fr, value.var='value') %>%
+  filter(!grepl('frames_with_at_least', variable))
+
+columns_to_include <- combined_1_30_apms %>% 
+  filter(gsub('\\(|\\)', '', variable) %in% columns_to_use[1:11]) %>%
+  group_by(variable) %>%
+  dplyr::summarise(cor=cor(fps1, fps30)) %>%
+  arrange(-abs(cor)) %>%
+  filter(cor > 0.5) %$%
+  variable %>%
+  gsub('\\(|\\)', '', .)
+
+combined_1_30_apms %>% 
+  filter(gsub('\\(|\\)', '', variable) %in% columns_to_use[1:11]) %>%
+  left_join(., apms_dataframe %>% dplyr::select(trial_id, Success, EBL), by='trial_id') %>%
+  group_by(variable) %>%
+  dplyr::summarise(cor_30=cor(EBL, fps30), cor_1=cor(EBL, fps1))
+
+combined_1_30_apms %>%
+  filter(variable=='frames_with_0_tools_in_view') %>%
+  filter(abs(fps30-fps1) > 0.2)
+
+ggplot(combined_1_30_apms %>% 
+         filter(gsub('\\(|\\)', '', variable) %in% columns_to_use[1:11]) %>%
+         left_join(., apms_dataframe %>% dplyr::select(trial_id, Success, EBL), by='trial_id'), 
+       aes(fps1, fps30)) +
+  geom_point() +
+  scale_color_gradient(low='black', high='white') +
+  facet_wrap(~variable, scales = 'free')
+```
+
+```{r}
+# Create our training and test splits (ground truth data) using the 30 fps detection data
+apms_30_fps_dataframe[is.na(apms_30_fps_dataframe)] <- 0
+
+apms_30_fps_fixed_c_names <- apms_30_fps_dataframe %>%
+  magrittr::set_colnames(gsub('\\(|\\)', '', colnames(.))) %>%
+  mutate(resolution=paste0(w, 'x', h))
+
+ebl.train.data <- apms_30_fps_fixed_c_names %>%
+  mutate(EBL=log2(EBL)) %>%
+  filter(trial_id %in% training_set) %>%
+  # dplyr::select(intersect(colnames(.), c('EBL', 'total', 'Group', 'endolast12mo', 'cadaverlast12', 'resolution', columns_to_use[1:11])))
+  dplyr::select(intersect(colnames(.), c('EBL', 'total', 'Group', 'endolast12mo', 'cadaverlast12', 'resolution', columns_to_include)))
+
+
+ebl.test.data <- apms_30_fps_fixed_c_names %>% 
+  mutate(EBL=log2(EBL)) %>%
+  filter(trial_id %in% prediction_test_set) %>%
+  # dplyr::select(intersect(colnames(.), c('EBL', 'total', 'Group', 'endolast12mo', 'cadaverlast12', 'resolution', columns_to_use[1:11])))
+  dplyr::select(intersect(colnames(.), c('EBL', 'total', 'Group', 'endolast12mo', 'cadaverlast12', 'resolution', columns_to_include)))
+
+
+ebl_accuracies_on_test <- NULL
+predictions_ebl <- NULL
+```
+
+```{r}
+# Build baseline lm EBL from total frames
+lm.fit <- train(
+  EBL ~ total, data = ebl.train.data, method = "glm",
+  trControl = trainControl("cv", number = 10)
+)
+
+# Make predictions
+predictions <- lm.fit %>% predict(ebl.test.data)
+predictions_ebl %<>% rbind(data.frame(pred=predictions, EBL=ebl.test.data$EBL, model='lm'))
+
+# Model prediction performance
+ebl_accuracies_on_test %<>% rbind(data.frame(
+  model = 'lm',
+  RMSE = RMSE(predictions, ebl.test.data$EBL),
+  Rsquare = R2(predictions, ebl.test.data$EBL)
+))
+```
+
+```{r}
+# Ridge regression
+ridge <- train(
+  EBL ~., data = ebl.train.data, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneGrid = expand.grid(alpha = 0, lambda = lambda)
+)
+
+# Make predictions
+predictions <- ridge %>% predict(ebl.test.data)
+predictions_ebl %<>% rbind(data.frame(pred=predictions, EBL=ebl.test.data$EBL, model='ridge'))
+
+# Model prediction performance
+ebl_accuracies_on_test %<>% rbind(data.frame(
+  model = 'ridge',
+  RMSE = RMSE(predictions, ebl.test.data$EBL),
+  Rsquare = R2(predictions, ebl.test.data$EBL)
+))
+```
+
+```{r}
+# Build the model
+lasso <- train(
+  EBL ~., data = ebl.train.data, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneGrid = expand.grid(alpha = 1, lambda = lambda)
+)
+
+# Make predictions
+predictions <- lasso %>% predict(ebl.test.data)
+predictions_ebl %<>% rbind(data.frame(pred=predictions, EBL=ebl.test.data$EBL, model='lasso'))
+
+# Model prediction performance
+ebl_accuracies_on_test %<>% rbind(data.frame(
+  model = 'lasso',
+  RMSE = RMSE(predictions, ebl.test.data$EBL),
+  Rsquare = R2(predictions, ebl.test.data$EBL)
+))
+```
+
+```{r}
+elastic <- train(
+  EBL ~., data = ebl.train.data, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneLength = 10
+  )
+
+# Make predictions
+predictions <- elastic %>% predict(ebl.test.data)
+predictions_ebl %<>% rbind(data.frame(pred=predictions, EBL=ebl.test.data$EBL, model='elastic'))
+
+# Model prediction performance
+ebl_accuracies_on_test %<>% rbind(data.frame(
+  model = 'elastic',
+  RMSE = RMSE(predictions, ebl.test.data$EBL),
+  Rsquare = R2(predictions, ebl.test.data$EBL)
+))
+```
+
+```{r}
+models <- list(lm.basic = lm.fit, ridge = ridge, lasso = lasso, elastic = elastic)
+resamples(models) %>% summary( metric = "RMSE")
+
+# Combine coefficents into data frame
+coef_df <- NULL
+for (m in names(models)) {
+  if (m %in% c('lm.basic', 'svm')) {
+    next()
+  }
+  
+  mod <- models[[m]]
+    
+  coef_m <- data.frame(coef(mod$finalModel, mod$bestTune$lambda)[,1]) %>%
+    as.data.frame() %>%
+    mutate(variable=row.names(.)) %>%
+    magrittr::set_colnames(c('value', 'variable')) %>%
+    mutate(source='EBL')
+  
+  row.names(coef_m) <- NULL
+  
+  coef_df %<>% rbind(coef_m %>% mutate(model=m))
+}
+
+coef_df %<>% 
+  mutate(v_type=case_when(
+    grepl('^frames_with', variable) ~ 'Proportion',
+    grepl('^first_frame', variable) ~ 'First Frame',
+    grepl('in_n_out', variable) ~ 'Tool Disappearances',
+    grepl('sd_[xy]', variable) ~ 'Coordinate variation',
+    grepl('sd_z', variable) ~ 'Coordinate variation (normalized)',
+    grepl('distance', variable) ~ 'Distance',
+    grepl('speed', variable) ~ 'Speed',
+    grepl('area', variable) ~ 'Area',
+    TRUE ~ 'Misc'
+  )) %>% filter(variable != '(Intercept)')
+```
+
+```{r}
+g3 <- ggplot(predictions_ebl, aes(EBL, pred, color=model)) +
+  geom_point(size=2) +
+  geom_abline(slope=1, linetype=2) +
+  xlab('Actual log2(EBL)') + ylab('Predicted log2(EBL)') + 
+  stat_cor(method = "pearson", label.x = 6, label.y = 10) +
+  facet_wrap(~model) +
+  theme_bw() + 
+  theme(
+    legend.position='none',
+    text = element_text(size=16),
+    axis.text = element_text(size=16),
+    axis.title = element_text(size=16)
+  )
+
+g3
+
+# ggsave(g2, filename=file.path(plot_dir, 'predicted_ebl_apms_30_fps_detection.pdf'), units='in', height=4, width = 6)
+
+ggplot(predictions_ebl, aes(EBL, abs(pred-EBL))) +
+  geom_point() +
+  facet_wrap(~model) + 
+  theme_bw()
+```
+
+```{r}
+ggsave(g2, filename = file.path(plot_dir, 'predicted_ebl_actual_models.pdf'), width = 6, height = 6, units='in')
+```
+
+```{r}
+g4 <- ggplot(coef_df %>% 
+      left_join(., ebl_accuracies_on_test, by='model') %>%
+      mutate(model_name=paste0(model, ' RMSE: ', round(RMSE, 2))), 
+    aes(variable, value, fill=model_name)
+  ) +
+  geom_bar(stat = 'identity', position = position_dodge()) +
+  facet_wrap(~v_type, scales = 'free') +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle=90, vjust=0.5, hjust=1),
+    legend.position = 'top',
+    legend.justification = 'left',
+    legend.direction = 'vertical'
+  )
+
+g4
 
 ggsave(g1, filename = file.path(plot_dir, 'predict_ebl_models.pdf'), width = 10, height = 12, units='in')
 ```
