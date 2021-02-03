@@ -7,11 +7,11 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE)
-library(tidyverse)
-library(magrittr)
-library(ggrepel)
-library(reshape2)
-library(DT)
+require(tidyverse)
+require(magrittr)
+require(ggrepel)
+require(reshape2)
+require(DT)
 ```
 
 ```{r}
@@ -557,7 +557,7 @@ for (to in c('suction', 'grasper', 'cottonoid', 'muscle')) {
     dplyr::select(trial_id, frame, x1, y1, x2, y2)
 }
 
-# Sincle data frame
+# Single data frame
 combined_suction_cottonoids <- merge(
   frames_with_tools$suction %>% 
     dplyr::rename(t1_x1=x1, t1_y1=y1, t1_x2=x2, t1_y2=y2), 
@@ -568,6 +568,14 @@ combined_suction_cottonoids <- merge(
 
 combined_grasper_muscle <- merge(
   frames_with_tools$grasper %>% 
+    dplyr::rename(t1_x1=x1, t1_y1=y1, t1_x2=x2, t1_y2=y2), 
+  frames_with_tools$muscle %>% 
+    dplyr::rename(t2_x1=x1, t2_y1=y1, t2_x2=x2, t2_y2=y2), 
+  by=c('trial_id', 'frame')
+) %>% filter(!is.na(t1_x1) & !is.na(t2_x1))
+
+combined_suction_muscle <- merge(
+  frames_with_tools$suction %>% 
     dplyr::rename(t1_x1=x1, t1_y1=y1, t1_x2=x2, t1_y2=y2), 
   frames_with_tools$muscle %>% 
     dplyr::rename(t2_x1=x1, t2_y1=y1, t2_x2=x2, t2_y2=y2), 
@@ -588,9 +596,45 @@ gm_areas <- apply(combined_grasper_muscle, 1, FUN = function(x) {
   )
 })
 
+sm_areas <- apply(combined_suction_muscle, 1, FUN = function(x) {
+  intersection_over_union(
+    c(x[['t1_x1']], x[['t1_y1']], x[['t1_x2']], x[['t1_y2']]),
+    c(x[['t2_x1']], x[['t2_y1']], x[['t2_x2']], x[['t2_y2']])
+  )
+})
+
 combined_suction_cottonoids[,'overlap'] <- sc_areas
 combined_grasper_muscle[,'overlap'] <- gm_areas
+combined_suction_muscle[,'overlap'] <- sm_areas
+```
 
+```{r}
+require(ggridges)
+
+overlap_ds <- list(
+  'suction_cottonoid'=combined_suction_cottonoids,
+  'grasper_muscle'=combined_grasper_muscle,
+  'suction_muscle'=combined_suction_muscle
+)
+
+for (ds in names(overlap_ds)) {
+  # Coming up with an overlap threshold
+  data <- overlap_ds[[ds]] %>%
+    left_join(., outcomes_relevant %>% dplyr::select(trial_id, Success), by='trial_id') %>%
+    mutate(Success=ifelse(Success==1, 'Success', 'Failure'))
+  
+  g1 <- ggplot(data, aes(frame, overlap, fill=Success)) +
+    geom_bar(stat='identity', alpha=1, position = position_dodge()) +
+    facet_wrap(~trial_id) +
+    theme(legend.position = 'top')
+
+  ggsave(g1, 
+    filename = file.path(plot_dir, paste0(ds, '_overlap.pdf')), 
+    units = 'in', height = 16, width = 8) 
+}
+```
+
+```{r}
 # Overlap threshold
 sc_overlap <- 0.15
 gm_overlap <- 0.05
