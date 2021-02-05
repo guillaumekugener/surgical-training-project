@@ -410,6 +410,28 @@ ggplot(combined_1_30_apms %>%
 ```
 
 ```{r}
+compared_tool_combos <- rbind(
+  n_tools_in_view_combos_ds %>%
+    gather(variable, value, -trial_id) %>%
+    mutate(source='fps1'),
+  n_tools_in_view_combos_30_fps_ds %>%
+    gather(variable, value, -trial_id) %>%
+    mutate(source='fps30')
+) %>% reshape2::dcast(trial_id + variable ~ source, value.var='value') %>%
+  mutate(fps1=ifelse(is.na(fps1), 0, fps1), fps30=ifelse(is.na(fps30), 0, fps30)) %>%
+  left_join(., apms_dataframe %>% dplyr::select(trial_id, total), by='trial_id') %>%
+  mutate(fps1=fps1/total, fps30=fps30/(total*30)) %>%
+  mutate(n_tools=str_count(variable, "_")-4+1)
+
+g5 <- ggplot(compared_tool_combos %>% filter(n_tools == 2), aes(fps1, fps30)) +
+  geom_point(alpha=0.75) +
+  stat_cor(method = "pearson") +
+  facet_wrap(~variable, scales='free', ncol = 3)
+
+ggsave(g5, filename = file.path(plot_dir, 'tool_combinations_1v30_fps.pdf'), units = 'in', height = 10, width = 8)
+```
+
+```{r}
 # Create our training and test splits (ground truth data) using the 30 fps detection data
 apms_30_fps_dataframe[is.na(apms_30_fps_dataframe)] <- 0
 

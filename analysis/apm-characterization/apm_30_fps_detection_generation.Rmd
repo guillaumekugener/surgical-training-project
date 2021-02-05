@@ -195,6 +195,18 @@ apms_30_fps_dataframe %<>% left_join(.,
 ```
 
 ```{r}
+n_tools_in_view_combos_30_fps_ds <- detect_results_30fps %>%
+  filter(tool %in% tools_of_interest) %>%
+  group_by(trial_id, short_file_name) %>%
+  dplyr::summarise(combos=paste0(unique(tool)[order(unique(tool))], collapse = '_')) %>%
+  ungroup() %>%
+  group_by(trial_id, combos) %>%
+  dplyr::summarise(count=n()) %>%
+  dplyr::mutate(combos=paste0('frames_with_', combos, '_in_view')) %>%
+  reshape2::dcast(trial_id ~ combos, value.var='count')
+```
+
+```{r}
 apms_30_fps_dataframe$frames_with_0_tools_in_view/apms_30_fps_dataframe$total
 ```
 

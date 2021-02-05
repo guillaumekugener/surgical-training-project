@@ -24,7 +24,7 @@ In a previous manuscript, we characterized similarities and differences in the d
 
 ```{r include=FALSE}
 # Frame dimensions
-frame_dimensions <- read_csv('~/Documents/USC/USC_docs/ml/datasets/fps-1-uncropped/image_sizes.csv')
+frame_dimensions <- read_csv('~/Documents/USC/USC_docs/ml/datasets/fps-1-uncropped-previous//image_sizes.csv')
 
 dimensions_grouping <- frame_dimensions %>%
   mutate(gname=paste0(w, 'x', h))
@@ -35,7 +35,7 @@ dg1280x720 <- dimensions_grouping %>% filter(gname=='1280x720') %$% trial_id
 
 ```{r include=FALSE}
 # Load ground truth 1 fps data
-gt_fps1 <- read_csv('~/Documents/USC/USC_docs/ml/datasets/fps-1-uncropped/ImageSets/Main/retinanet_surgical_1fps_complete.csv',
+gt_fps1 <- read_csv('~/Documents/USC/USC_docs/ml/datasets/fps-1-uncropped-previous/ImageSets/Main/retinanet_surgical_1fps_complete.csv',
   col_names = c('file', 'x1', 'y1', 'x2', 'y2', 'tool')) %>%
   mutate(short_file_name=gsub('.*/', '', file)) %>%
   mutate(trial_id=gsub('[a-z]?_.*', '', short_file_name)) %>%
@@ -174,6 +174,19 @@ apms_dataframe %<>% left_join(.,
   n_tools_in_view_ds,
   by = 'trial_id') %>%
   mutate(frames_with_0_tools_in_view=total-frames_with_at_least_1_tool_in_view)
+```
+
+```{r eval=FALSE}
+# Look at combinations
+n_tools_in_view_combos_ds <- gt_fps1 %>%
+  filter(tool %in% tools_of_interest) %>%
+  group_by(trial_id, short_file_name) %>%
+  dplyr::summarise(combos=paste0(unique(tool)[order(unique(tool))], collapse = '_')) %>%
+  ungroup() %>%
+  group_by(trial_id, combos) %>%
+  dplyr::summarise(count=n()) %>%
+  dplyr::mutate(combos=paste0('frames_with_', combos, '_in_view')) %>%
+  reshape2::dcast(trial_id ~ combos, value.var='count')
 ```
 
 * First frame that each tool appears in during the trial. If a tool does not appear in the trial, this feature is set to the length of the trial.
