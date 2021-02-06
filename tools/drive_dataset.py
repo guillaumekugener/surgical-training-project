@@ -857,21 +857,39 @@ def make_annotations(
 """Get the list of trials in the test split"""
 def get_trial_test_set():
     return [
-        'S316T1', 'S316T2',
-                  'S407T2', # because we do not have many 400s
-        'S504T1',           # because we do not have many 500s
-        'S604T1', 'S604T2',
-                  'S808T2'
+        # Old test set
+        # 'S316T1', 'S316T2',
+        #           'S407T2', # because we do not have many 400s
+        # 'S504T1',           # because we do not have many 500s
+        # 'S604T1', 'S604T2',
+        #           'S808T2',
+        # Second batch of data annotated (all from one site)
+        'S201T1', 'S201T2',
+        'S202T1', 'S202T2',
+        'S203T1', 'S203T2',
+        'S204T1', 'S204T2',
+        'S205T1', 'S205T2',
+        'S206T1', 'S206T2',
+        'S207T1', 'S207T2'
     ]
 
 """Get the list of trial in the validation split"""
 def get_trial_validation_set():
     return [
-        'S306T1', 'S306T2',
-        'S407T1', 
-                  'S504T2',
-        'S612T1', 'S612T2',
-        'S807T1', 'S807T2'
+        # Old validation set
+        # 'S306T1', 'S306T2',
+        # 'S407T1', 
+        #           'S504T2',
+        # 'S612T1', 'S612T2',
+        # 'S807T1', 'S807T2',
+        # 'S113T1', 'S113T2',
+        # New validation data
+        'S502T1', 'S502T2',
+        'S502T2',
+        'S504T1', 'S504T2',
+        'S505T1', 'S505T2',
+        'S506T1',
+        'S507T1', 'S507T2'
     ]
 
 
