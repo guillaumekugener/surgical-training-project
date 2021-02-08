@@ -24,7 +24,7 @@ In a previous manuscript, we characterized similarities and differences in the d
 
 ```{r include=FALSE}
 # Frame dimensions
-frame_dimensions <- read_csv('~/Documents/USC/USC_docs/ml/datasets/fps-1-uncropped-previous//image_sizes.csv')
+frame_dimensions <- read_csv('~/Documents/USC/USC_docs/ml/datasets/fps-1-uncropped-previous/image_sizes.csv')
 
 dimensions_grouping <- frame_dimensions %>%
   mutate(gname=paste0(w, 'x', h))

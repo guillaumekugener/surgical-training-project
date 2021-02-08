@@ -382,11 +382,12 @@ combined_1_30_apms <- apms_dataframe %>%
   filter(!grepl('frames_with_at_least', variable))
 
 columns_to_include <- combined_1_30_apms %>% 
-  filter(gsub('\\(|\\)', '', variable) %in% columns_to_use[1:11]) %>%
+  filter(gsub('\\(|\\)', '', variable) %in% columns_to_use) %>%
   group_by(variable) %>%
   dplyr::summarise(cor=cor(fps1, fps30)) %>%
   arrange(-abs(cor)) %>%
-  filter(cor > 0.5) %$%
+  # filter(cor > -10) %$%
+  arrange(-abs(cor)) %$%
   variable %>%
   gsub('\\(|\\)', '', .)
 
@@ -400,13 +401,16 @@ combined_1_30_apms %>%
   filter(variable=='frames_with_0_tools_in_view') %>%
   filter(abs(fps30-fps1) > 0.2)
 
-ggplot(combined_1_30_apms %>% 
-         filter(gsub('\\(|\\)', '', variable) %in% columns_to_use[1:11]) %>%
+g6 <- ggplot(combined_1_30_apms %>% 
+         filter(gsub('\\(|\\)', '', variable) %in% columns_to_use) %>%
          left_join(., apms_dataframe %>% dplyr::select(trial_id, Success, EBL), by='trial_id'), 
        aes(fps1, fps30)) +
-  geom_point() +
-  scale_color_gradient(low='black', high='white') +
-  facet_wrap(~variable, scales = 'free')
+  geom_point(size=0.5) +
+  stat_cor(method = "pearson") +
+  facet_wrap(~variable, scales = 'free', ncol=6) +
+  theme(strip.text.x = element_text(size = 8))
+
+ggsave(g6, filename = file.path(plot_dir, 'apms_1v30_fps.pdf'), units = 'in', height = 16, width = 12)
 ```
 
 ```{r}
@@ -445,13 +449,14 @@ ebl.train.data <- apms_30_fps_fixed_c_names %>%
   # dplyr::select(intersect(colnames(.), c('EBL', 'total', 'Group', 'endolast12mo', 'cadaverlast12', 'resolution', columns_to_use[1:11])))
   dplyr::select(intersect(colnames(.), c('EBL', 'total', 'Group', 'endolast12mo', 'cadaverlast12', 'resolution', columns_to_include)))
 
-
 ebl.test.data <- apms_30_fps_fixed_c_names %>% 
   mutate(EBL=log2(EBL)) %>%
   filter(trial_id %in% prediction_test_set) %>%
   # dplyr::select(intersect(colnames(.), c('EBL', 'total', 'Group', 'endolast12mo', 'cadaverlast12', 'resolution', columns_to_use[1:11])))
   dplyr::select(intersect(colnames(.), c('EBL', 'total', 'Group', 'endolast12mo', 'cadaverlast12', 'resolution', columns_to_include)))
 
+ggplot(data=rbind(ebl.train.data %>% mutate(s='train'), ebl.test.data %>% mutate(s='test')), aes(EBL, fill=s)) +
+  geom_density(alpha=0.5)
 
 ebl_accuracies_on_test <- NULL
 predictions_ebl <- NULL
@@ -602,7 +607,7 @@ ggplot(predictions_ebl, aes(EBL, abs(pred-EBL))) +
 ggsave(g2, filename = file.path(plot_dir, 'predicted_ebl_actual_models.pdf'), width = 6, height = 6, units='in')
 ```
 
-```{r}
+```{r fig.height=12}
 g4 <- ggplot(coef_df %>% 
       left_join(., ebl_accuracies_on_test, by='model') %>%
       mutate(model_name=paste0(model, ' RMSE: ', round(RMSE, 2))), 

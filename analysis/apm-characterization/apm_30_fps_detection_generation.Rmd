@@ -36,19 +36,88 @@ dg1280x720 <- dimensions_grouping %>% filter(gname=='1280x720') %$% trial_id
 First, we need to choose the appropriate cutoffs for a 'positive' tool detection
 
 ```{r}
+# A bunch of helper functions
+prep_for_precision_recall_curve <- function(df, total_positives) {
+  precision_recall <- df %>%
+    arrange(-score) %>%
+    mutate(
+      ACC_TP = cumsum(TP),
+      ACC_FP = cumsum(FP)
+    ) %>%
+    mutate(
+      precision = ACC_TP / (ACC_TP + ACC_FP),
+      recall = ACC_TP / total_positives
+    )
+  
+  return(precision_recall)
+}
+```
+
+```{r}
+# Load ground truth 1 fps data
+gt_fps1 <- read_csv('~/Documents/USC/USC_docs/ml/datasets/fps-1-uncropped-previous/ImageSets/Main/retinanet_surgical_1fps_complete.csv',
+  col_names = c('file', 'x1', 'y1', 'x2', 'y2', 'tool')) %>%
+  mutate(short_file_name=gsub('.*/', '', file)) %>%
+  mutate(trial_id=gsub('[a-z]?_.*', '', short_file_name)) %>%
+  mutate(frame=as.numeric(stringr::str_extract(pattern='[0-9]+', string=gsub('.*_', '', short_file_name))))
+
+gt_fps1_test_only <- read_csv('~/Documents/USC/USC_docs/ml/datasets/fps-1-uncropped-previous/ImageSets/Main/retinanet_surgical_1fps_test.csv',
+  col_names = c('file', 'x1', 'y1', 'x2', 'y2', 'tool')) %>%
+  mutate(short_file_name=gsub('.*/', '', file)) %>%
+  mutate(trial_id=gsub('[a-z]?_.*', '', short_file_name)) %>%
+  mutate(frame=as.numeric(stringr::str_extract(pattern='[0-9]+', string=gsub('.*_', '', short_file_name))))
+
+# Will need to calculate proportions
+total_frames_by_trial <- gt_fps1 %>%
+  group_by(trial_id) %>%
+  dplyr::summarise(total=length(unique(short_file_name))*30)
+```
+
+```{r}
 # We are also interested to see how our models perform using the output from the 30 fps detections
 classes_of_interest <- c('suction', 'grasper', 'cottonoid', 'muscle', 'string' , 'drill', 'tool', 'scalpel')
 retinanet_1_fps_results <- read_csv(file.path(save_location_results, 'test_retinanet_pred_retina_style.csv')) %>%
   filter(class %in% classes_of_interest) %>%
   mutate(pred_type=ifelse(tp == 1, 'TP', ifelse(fp == 1, 'FP', 'Other')))
 
+
+# Picking a cutoff for each tool
+f1s_compare <- NULL
+for (to in classes_of_interest) {
+  total_positives <- gt_fps1_test_only %>%
+    filter(tool==to) %>%
+    nrow()
+  for (thresh in seq(0, 0.95, 0.01)) {
+    pr <- prep_for_precision_recall_curve(
+      df = retinanet_1_fps_results %>% 
+        dplyr::rename(TP=tp, FP=fp) %>% 
+        filter(class==to) %>%
+        filter(score > thresh),
+      total_positives = total_positives
+    ) %>% tail(1) %>%
+      dplyr::select(precision, recall) %>%
+      mutate(f1=(2*precision*recall)/(precision + recall)) %>%
+      mutate(threshold=thresh) %>%
+      mutate(tool=to)
+    
+    f1s_compare %<>% rbind(pr)
+  }
+}
+
+score_cutoffs_to_use_df <- f1s_compare %>%
+  group_by(tool) %>%
+  slice_max(order_by = f1, n = 1) %>%
+  group_by(tool) %>%
+  dplyr::summarise(f1=max(f1), thresh=max(threshold)) 
+
+score_cutoffs <- score_cutoffs_to_use_df %$%
+  setNames(thresh, tool)
+
 # Now have to pick cutoffs
 ggplot(retinanet_1_fps_results, aes(score, fill=pred_type)) +
   geom_density(alpha=0.5) +
+  geom_vline(data = score_cutoffs_to_use_df %>% dplyr::rename(class=tool), aes(xintercept=thresh), linetype=2) +
   facet_wrap(~class, scales = 'free_y')
-
-# Based on visual inspection for now...
-score_cutoff <- 0.2
 ```
 
 ```{r include=FALSE}
@@ -67,7 +136,7 @@ for (fid in seq(1, length(rn_30_files))) {
       filter(label %in% classes_of_interest) %>%
       group_by(frame, label) %>%
       top_n(1, score) %>%
-      filter(score > score_cutoff)
+      filter(score > score_cutoffs[label])
     )
   
   # Update progress bar
@@ -78,20 +147,6 @@ detect_results_30fps <- retinanet_30_fps_results %>%
   mutate(short_file_name=paste0(vid, '_', frame, '_', '.jpeg')) %>%
   mutate(trial_id=gsub('[a-z]?_.*', '', short_file_name)) %>%
   dplyr::select(trial_id, short_file_name, frame, x1, y1, x2, y2, tool=label)
-```
-
-```{r}
-# Load ground truth 1 fps data
-gt_fps1 <- read_csv('~/Documents/USC/USC_docs/ml/datasets/fps-1-uncropped/ImageSets/Main/retinanet_surgical_1fps_complete.csv',
-  col_names = c('file', 'x1', 'y1', 'x2', 'y2', 'tool')) %>%
-  mutate(short_file_name=gsub('.*/', '', file)) %>%
-  mutate(trial_id=gsub('[a-z]?_.*', '', short_file_name)) %>%
-  mutate(frame=as.numeric(stringr::str_extract(pattern='[0-9]+', string=gsub('.*_', '', short_file_name))))
-
-# Will need to calculate proportions
-total_frames_by_trial <- gt_fps1 %>%
-  group_by(trial_id) %>%
-  dplyr::summarise(total=length(unique(short_file_name))*30)
 ```
 
 ```{r include=FALSE}
