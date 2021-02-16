@@ -1,0 +1,852 @@
+---
+title: "Success and EBL Prediction from APMs"
+author: "Guillaume Kugener"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+# APMs to Predict Success vs. Failure
+
+The purpose of this analysis is to see how well we can predict success vs. failure and EBL using the APMs we have developed. We are also then interested in seeing which APMs our model weighs the most.
+
+For this analysis, we will use trials 40X and 31X for testing and the remaining for training. We will use five fold cross validation when performing our training
+
+```{r}
+plot_dir <- '~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/apm-characterization/20210205/plots'
+data_dir <- plot_dir %>% gsub('plots', 'data', .)
+```
+
+```{r child=apm_generation.Rmd}
+```
+
+```{r}
+library(caret)
+library(glmnet)
+library(ggpubr)
+```
+
+```{r}
+# For test set, we are going to randomly sample 6 trials in each of the follow: trainee-success, trainee-failure, attending-success, attending-failure
+set.seed(123)
+test_ts <- apms_dataframe %>% filter(Success==1, Group=='Trainee') %$% trial_id %>% sample(6)
+set.seed(123)
+test_tf <- apms_dataframe %>% filter(Success==0, Group=='Trainee') %$% trial_id %>% sample(6)
+set.seed(123)
+test_as <- apms_dataframe %>% filter(Success==1, Group=='Attending') %$% trial_id %>% sample(6)
+set.seed(123)
+test_af <- apms_dataframe %>% filter(Success==0, Group=='Attending') %$% trial_id %>% sample(6)
+
+
+prediction_test_set <- c(test_ts, test_tf, test_as, test_af)
+# prediction_test_set <- apms_dataframe$trial_id %>% .[grep('^S2', .)] # There is only 1/14 failures in this set...
+training_set <- setdiff(apms_dataframe$trial_id, prediction_test_set)
+```
+
+```{r}
+# For reproducible results
+set.seed(123)
+```
+
+```{r}
+# Fix the column names so we do not have weird characters that give errors to our model
+apms_fixed_c_names <- apms_dataframe %>%
+  magrittr::set_colnames(gsub('\\(|\\)', '', colnames(.))) %>%
+  mutate(resolution=paste0(w, 'x', h))
+
+# Set NAs to 0 for now, but this may not be the right thing to do...
+apms_fixed_c_names[is.na(apms_fixed_c_names)] <- 0
+```
+
+```{r}
+# Comparing APMs to total frames (see which APMs are very strongly related to length of trial vs. those that may be picking up on something different. Unfortunately, this is tough to work with because skill = 1/time spent)
+apms_fixed_c_names %>%
+  gather(variable, value, -trial_id, -total, -w, -h, -Group, -Success, -resolution) %>%
+  group_by(variable) %>%
+  dplyr::summarise(cor=cor(value, total)) %>%
+  arrange(-abs(cor)) %>%
+  datatable(options=list(scrollX=T))
+```
+
+```{r}
+# Which features do we want to use
+columns_to_use <- colnames(apms_fixed_c_names) %>% 
+  .[11:length(.)] %>%
+  gsub('\\(|\\)', '', .) %>%
+  setdiff(., c('frames_with_at_least_1_tool_in_view', 'frames_with_5_tools_in_view'))
+```
+
+```{r}
+# All code below taken from: http://www.sthda.com/english/articles/37-model-selection-essentials-in-r/153-penalized-regression-essentials-ridge-lasso-elastic-net/
+
+# Set up a grid range o lambda values
+lambda <- 10^seq(-3, 3, length=100)
+```
+
+## Predicting Success
+
+First, we will try to predict trial success vs. failure
+
+```{r}
+# Create our training and test splits
+success.train.data <- apms_fixed_c_names %>%
+  filter(trial_id %in% training_set) %>%
+  dplyr::select(c('Success', 'Group', 'endolast12mo', 'cadaverlast12', columns_to_use)) %>%
+  mutate(Success=factor(Success))
+
+success.test.data <- apms_fixed_c_names %>% 
+  filter(trial_id %in% prediction_test_set) %>%
+  dplyr::select(c('Success', 'Group', 'endolast12mo', 'cadaverlast12', columns_to_use)) %>%
+  mutate(Success=factor(Success))
+
+s_f_prediction_res <- NULL
+```
+
+```{r}
+# Ridge regression
+ridge <- train(
+  Success ~., data = success.train.data, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneGrid = expand.grid(alpha = 0, lambda = lambda)
+)
+
+# Model coefficients
+# coef(ridge$finalModel, ridge$bestTune$lambda)
+
+# Make predictions
+predictions <- ridge %>% predict(success.test.data)
+
+# Model prediction performance
+s_f_prediction_res %<>% rbind(data.frame(
+  accuracy=length(which(predictions==success.test.data$Success))/nrow(success.test.data)
+) %>% mutate(model='ridge'))
+```
+
+```{r}
+# Build the model
+lasso <- train(
+  Success ~., data = success.train.data, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneGrid = expand.grid(alpha = 1, lambda = lambda)
+)
+
+# Model coefficients
+# coef(lasso$finalModel, lasso$bestTune$lambda)
+
+# Make predictions
+predictions <- lasso %>% predict(success.test.data)
+
+# Model prediction performance
+s_f_prediction_res %<>% rbind(data.frame(
+  accuracy=length(which(predictions==success.test.data$Success))/nrow(success.test.data)
+) %>% mutate(model='lasso'))
+```
+
+```{r}
+elastic <- train(
+  Success ~., data = success.train.data, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneLength = 10
+  )
+
+# Model coefficients
+elastic_net_success_coefs <- data.frame(coef(elastic$finalModel, elastic$bestTune$lambda)[,1]) %>%
+  as.data.frame() %>%
+  mutate(variable=row.names(.)) %>%
+  magrittr::set_colnames(c('value', 'variable')) %>%
+  mutate(source='Success')
+
+# Make predictions
+predictions <- elastic %>% predict(success.test.data)
+
+# Model prediction performance
+s_f_prediction_res %<>% rbind(data.frame(
+  accuracy=length(which(predictions==success.test.data$Success))/nrow(success.test.data)
+) %>% mutate(model='elastic'))
+```
+
+```{r}
+random_forest <- train(
+  Success ~., data = success.train.data, method = "rf",
+  trControl = trainControl("cv", number = 10),
+  tuneLength = 10
+  )
+
+# Make predictions
+predictions <- random_forest %>% predict(success.test.data)
+
+# Model prediction performance
+s_f_prediction_res %<>% rbind(data.frame(
+  accuracy=length(which(predictions==success.test.data$Success))/nrow(success.test.data)
+) %>% mutate(model='rf'))
+```
+
+```{r}
+s_f_prediction_res %>%
+  write.table(., file=file.path(data_dir, 'accuracy_predict_success_failure_1fps_annotated_apms.csv'), sep = ',', quote=F, row.names=F)
+```
+
+```{r}
+models <- list(ridge = ridge, lasso = lasso, elastic = elastic, rf = random_forest)
+resamples(models) %>% summary( metric = "Accuracy")
+```
+
+## Predicting Trainee vs. Attending Status
+
+Now, we will try to predict attending vs. trainee status
+
+```{r}
+# Create our training and test splits
+success.train.data <- apms_fixed_c_names %>%
+  filter(trial_id %in% training_set) %>%
+  dplyr::select(c('Success', 'Group', columns_to_use)) %>%
+  mutate(Status=factor(Group)) %>%
+  dplyr::select(-Group)
+
+success.test.data <- apms_fixed_c_names %>% 
+  filter(trial_id %in% prediction_test_set) %>%
+  dplyr::select(c('Success', 'Group', columns_to_use)) %>%
+  mutate(Status=factor(Group)) %>%
+  dplyr::select(-Group)
+
+t_v_attending_results <- NULL
+```
+
+```{r}
+# Ridge regression
+ridge <- train(
+  Status ~., data = success.train.data, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneGrid = expand.grid(alpha = 0, lambda = lambda)
+)
+
+# Model coefficients
+# coef(ridge$finalModel, ridge$bestTune$lambda)
+
+# Make predictions
+predictions <- ridge %>% predict(success.test.data)
+
+# Model prediction performance
+t_v_attending_results %<>% rbind(data.frame(
+  accuracy=length(which(predictions==success.test.data$Status))/nrow(success.test.data)
+) %>% mutate(model='ridge'))
+```
+
+```{r}
+# Build the model
+lasso <- train(
+  Status ~., data = success.train.data, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneGrid = expand.grid(alpha = 1, lambda = lambda)
+)
+
+# Model coefficients
+# coef(lasso$finalModel, lasso$bestTune$lambda)
+
+# Make predictions
+predictions <- lasso %>% predict(success.test.data)
+
+# Model prediction performance
+t_v_attending_results %<>% rbind(data.frame(
+  accuracy=length(which(predictions==success.test.data$Status))/nrow(success.test.data)
+) %>% mutate(model='lasso'))
+```
+
+```{r}
+elastic <- train(
+  Status ~., data = success.train.data, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneLength = 10
+  )
+
+# Model coefficients
+elastic_net_success_coefs <- data.frame(coef(elastic$finalModel, elastic$bestTune$lambda)[,1]) %>%
+  as.data.frame() %>%
+  mutate(variable=row.names(.)) %>%
+  magrittr::set_colnames(c('value', 'variable')) %>%
+  mutate(source='Status')
+
+# Make predictions
+predictions <- elastic %>% predict(success.test.data)
+
+# Model prediction performance
+t_v_attending_results %<>% rbind(data.frame(
+  accuracy=length(which(predictions==success.test.data$Status))/nrow(success.test.data)
+) %>% mutate(model='elastic'))
+```
+
+```{r}
+random_forest <- train(
+  Status ~., data = success.train.data, method = "rf",
+  trControl = trainControl("cv", number = 10),
+  tuneLength = 10
+  )
+
+# Make predictions
+predictions <- random_forest %>% predict(success.test.data)
+
+# Model prediction performance
+t_v_attending_results %<>% rbind(data.frame(
+  accuracy=length(which(predictions==success.test.data$Status))/nrow(success.test.data)
+) %>% mutate(model='rf'))
+```
+
+```{r}
+t_v_attending_results %>%
+  write.table(., file=file.path(data_dir, 'accuracy_predict_training_level_1fps_annotated_apms.csv'), sep = ',', quote=F, row.names=F)
+```
+
+```{r}
+models <- list(ridge = ridge, lasso = lasso, elastic = elastic, rf = random_forest)
+resamples(models) %>% summary( metric = "Accuracy")
+```
+
+## Predicting EBL
+
+```{r}
+# Change the training and test set to be the entire 200s cohort (all successes)
+# prediction_test_set <- apms_dataframe$trial_id %>% .[grep('(40|31)[0-9]', .)]
+# prediction_test_set <- apms_dataframe$trial_id %>% .[grep('^S1', .)] # There is only 1/14 failures in this set...
+# training_set <- setdiff(apms_dataframe$trial_id, prediction_test_set)
+```
+
+### From 1 FPS APMs
+
+```{r}
+# Create our training and test splits (ground truth data)
+ebl.train.data <- apms_fixed_c_names %>%
+  mutate(EBL=log2(EBL)) %>%
+  filter(trial_id %in% training_set) %>%
+  dplyr::select(c('trial_id', 'EBL', 'total', 'Group', 'endolast12mo', 'cadaverlast12', 'resolution', columns_to_use))# %>%
+  # dplyr::select(c('EBL', 'total', 'Group', 'endolast12mo', 'cadaverlast12', 'resolution', columns_to_include))
+
+ebl.test.data <- apms_fixed_c_names %>% 
+  mutate(EBL=log2(EBL)) %>%
+  filter(trial_id %in% prediction_test_set) %>%
+  dplyr::select(c('trial_id', 'EBL', 'total', 'Group', 'endolast12mo', 'cadaverlast12', 'resolution', columns_to_use))# %>%
+  # dplyr::select(c('EBL', 'total', 'Group', 'endolast12mo', 'cadaverlast12', 'resolution', columns_to_include))
+
+ebl.combined_data <- rbind(ebl.train.data, ebl.test.data) %>%
+  mutate(t_group=ifelse(trial_id %in% prediction_test_set, 'test', 'train'))
+
+ebl.train.data %<>% dplyr::select(-trial_id)
+ebl.test.data %<>% dplyr::select(-trial_id)
+
+ebl_accuracies <- NULL
+predictions_ebl <- NULL
+```
+
+```{r}
+# Build baseline lm EBL from total frames
+lm.fit <- train(
+  EBL ~ total, data = ebl.train.data, method = "glm",
+  trControl = trainControl("cv", number = 10)
+)
+
+# Make predictions
+predictions <- lm.fit %>% predict(ebl.combined_data)
+predictions_ebl %<>% rbind(data.frame(
+  pred=predictions, 
+  EBL=ebl.combined_data$EBL, 
+  trial_id=ebl.combined_data$trial_id, 
+  model='lm'))
+
+# Model prediction performance
+ebl_accuracies %<>% rbind(data.frame(
+  model = 'lm',
+  RMSE = predictions_ebl %>% filter(trial_id %in% prediction_test_set) %$% RMSE(pred, EBL),
+  Rsquare = predictions_ebl %>% filter(trial_id %in% prediction_test_set) %$% R2(pred, EBL)
+))
+```
+
+```{r}
+# Ridge regression
+ridge <- train(
+  EBL ~., data = ebl.train.data, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneGrid = expand.grid(alpha = 0, lambda = lambda)
+)
+
+# Make predictions
+predictions <- ridge %>% predict(ebl.combined_data)
+predictions_ebl %<>% rbind(data.frame(
+  pred=predictions, 
+  EBL=ebl.combined_data$EBL, 
+  trial_id=ebl.combined_data$trial_id, 
+  model='ridge'))
+
+# Model prediction performance
+ebl_accuracies %<>% rbind(data.frame(
+  model = 'ridge',
+  RMSE = predictions_ebl %>% filter(trial_id %in% prediction_test_set) %$% RMSE(pred, EBL),
+  Rsquare = predictions_ebl %>% filter(trial_id %in% prediction_test_set) %$% R2(pred, EBL)
+))
+```
+
+```{r}
+# Build the model
+lasso <- train(
+  EBL ~., data = ebl.train.data, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneGrid = expand.grid(alpha = 1, lambda = lambda)
+)
+
+# Make predictions
+predictions <- lasso %>% predict(ebl.combined_data)
+predictions_ebl %<>% rbind(data.frame(
+  pred=predictions, 
+  EBL=ebl.combined_data$EBL, 
+  trial_id=ebl.combined_data$trial_id, 
+  model='lasso'))
+
+# Model prediction performance
+ebl_accuracies %<>% rbind(data.frame(
+  model = 'lasso',
+  RMSE = predictions_ebl %>% filter(trial_id %in% prediction_test_set) %$% RMSE(pred, EBL),
+  Rsquare = predictions_ebl %>% filter(trial_id %in% prediction_test_set) %$% R2(pred, EBL)
+))
+```
+
+```{r}
+elastic <- train(
+  EBL ~., data = ebl.train.data, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneLength = 10
+  )
+
+# Make predictions
+predictions <- elastic %>% predict(ebl.combined_data)
+predictions_ebl %<>% rbind(data.frame(
+  pred=predictions, 
+  EBL=ebl.combined_data$EBL, 
+  trial_id=ebl.combined_data$trial_id, 
+  model='elastic'))
+
+# Model prediction performance
+ebl_accuracies %<>% rbind(data.frame(
+  model = 'elastic',
+  RMSE = predictions_ebl %>% filter(trial_id %in% prediction_test_set) %$% RMSE(pred, EBL),
+  Rsquare = predictions_ebl %>% filter(trial_id %in% prediction_test_set) %$% R2(pred, EBL)
+))
+```
+
+```{r}
+models <- list(lm.basic = lm.fit, ridge = ridge, lasso = lasso, elastic = elastic)
+resamples(models) %>% summary( metric = "RMSE")
+
+# Combine coefficents into data frame
+coef_df <- NULL
+for (m in names(models)) {
+  if (m %in% c('lm.basic', 'svm')) {
+    next()
+  }
+  
+  mod <- models[[m]]
+    
+  coef_m <- data.frame(coef(mod$finalModel, mod$bestTune$lambda)[,1]) %>%
+    as.data.frame() %>%
+    mutate(variable=row.names(.)) %>%
+    magrittr::set_colnames(c('value', 'variable')) %>%
+    mutate(source='EBL')
+  
+  row.names(coef_m) <- NULL
+  
+  coef_df %<>% rbind(coef_m %>% mutate(model=m))
+}
+
+coef_df %<>% 
+  mutate(v_type=case_when(
+    grepl('^frames_with', variable) ~ 'Proportion',
+    grepl('^first_frame', variable) ~ 'First Frame',
+    grepl('in_n_out', variable) ~ 'Tool Disappearances',
+    grepl('sd_[xy]', variable) ~ 'Coordinate variation',
+    grepl('sd_z', variable) ~ 'Coordinate variation (normalized)',
+    grepl('distance', variable) ~ 'Distance',
+    grepl('speed', variable) ~ 'Speed',
+    grepl('area', variable) ~ 'Area',
+    TRUE ~ 'Misc'
+  )) %>% filter(variable != '(Intercept)')
+```
+
+Model predictions vs. actual looking at the training set
+
+```{r}
+ebl_pred_from_annotated_df <- predictions_ebl %>%
+  mutate(tg= ifelse(trial_id %in% prediction_test_set, 'test', 'train'))
+
+ebl_pred_from_annotated_df %>%
+  write.table(., file=file.path(data_dir, 'ebl_prediction_from_1fps_annotated.csv'), sep=',', quote=F, row.names=F)
+
+g.ebl.pred <- ggplot(ebl_pred_from_annotated_df,
+                  aes(EBL, pred, color=tg)) +
+  geom_point(aes(size=tg)) +
+  geom_abline(slope=1, linetype=2) +
+  xlab('Actual log2(EBL)') + ylab('Predicted log2(EBL)') + 
+  stat_cor(method = "pearson") +
+  facet_wrap(~model) +
+  scale_size_manual(values=c('test'=2, 'train'=0.5)) +
+  theme_bw() + 
+  theme(
+    legend.position='top',
+    legend.justification = 'left',
+    text = element_text(size=16),
+    axis.text = element_text(size=16),
+    axis.title = element_text(size=16)
+  )
+
+g.ebl.pred
+```
+
+```{r}
+ggsave(g.ebl.pred, filename = file.path(plot_dir, 'predicted_ebl_actual_models_using_1fps_annotated.pdf'), width = 6, height = 6, units='in')
+```
+
+```{r fig.height=12}
+ebl_coef_plot_data <- coef_df %>% 
+      left_join(., ebl_accuracies, by='model') %>%
+      mutate(model_name=paste0(model, ' RMSE: ', round(RMSE, 2)))
+
+ebl_coef_plot_data %>%
+  write.table(., file = file.path(data_dir, 'ebl_coefficients_1fps_annotated.csv'), sep=',', quote=F, row.names=F)
+
+g1 <- ggplot(ebl_coef_plot_data, 
+    aes(variable, value, fill=model_name)
+  ) +
+  geom_bar(stat = 'identity', position = position_dodge()) +
+  facet_wrap(~v_type, scales = 'free') +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle=90, vjust=0.5, hjust=1),
+    legend.position = 'top',
+    legend.justification = 'left',
+    legend.direction = 'vertical'
+  )
+
+
+
+g1
+
+ggsave(g1, filename = file.path(plot_dir, 'coefficients_ebl_from_1fps_annotated.pdf'), width = 10, height = 12, units='in')
+```
+
+### From 30 FPS Detection Data
+
+```{r}
+# Compare 1 fps proportion of tool use data to 30 fps proportion of tool use
+frame_columns <- colnames(apms_dataframe) %>% .[11:length(.)]
+
+combined_1_30_apms <- apms_dataframe %>%
+  dplyr::select(c('trial_id', frame_columns)) %>%
+  magrittr::set_colnames(paste0('fps1_', colnames(.))) %>%
+  dplyr::rename(trial_id=fps1_trial_id) %>%
+  left_join(.,
+    apms_30_fps_dataframe %>%
+      dplyr::select(c('trial_id', frame_columns)) %>%
+      magrittr::set_colnames(paste0('fps30_', colnames(.))) %>%
+      dplyr::rename(trial_id=fps30_trial_id),
+    by = 'trial_id'
+  ) %>%
+  gather(variable, value, -trial_id) %>%
+  mutate(fr=gsub('_.*', '', variable)) %>%
+  mutate(variable=gsub('fps[0-9]+_', '', variable)) %>%
+  reshape2::dcast(trial_id + variable ~ fr, value.var='value') %>%
+  filter(!grepl('frames_with_at_least', variable))
+
+columns_to_include <- combined_1_30_apms %>% 
+  filter(gsub('\\(|\\)', '', variable) %in% columns_to_use) %>%
+  group_by(variable) %>%
+  dplyr::summarise(cor=cor(fps1, fps30)) %>%
+  arrange(-abs(cor)) %>%
+  # filter(cor > -10) %$%
+  arrange(-abs(cor)) %$%
+  variable %>%
+  gsub('\\(|\\)', '', .)
+
+combined_1_30_apms %>% 
+  filter(gsub('\\(|\\)', '', variable) %in% columns_to_use[1:11]) %>%
+  left_join(., apms_dataframe %>% dplyr::select(trial_id, Success, EBL), by='trial_id') %>%
+  group_by(variable) %>%
+  dplyr::summarise(cor_30=cor(EBL, fps30), cor_1=cor(EBL, fps1))
+
+combined_1_30_apms %>%
+  filter(variable=='frames_with_0_tools_in_view') %>%
+  filter(abs(fps30-fps1) > 0.2)
+
+g6 <- ggplot(combined_1_30_apms %>% 
+         filter(gsub('\\(|\\)', '', variable) %in% columns_to_use) %>%
+         left_join(., apms_dataframe %>% dplyr::select(trial_id, Success, EBL), by='trial_id'), 
+       aes(fps1, fps30)) +
+  geom_point(size=0.5) +
+  xlab('Annotated 1 FPS APM') + ylab('Detection 1 FPS APM') +
+  stat_cor(method = "pearson") +
+  facet_wrap(~variable, scales = 'free', ncol=6) +
+  theme(strip.text.x = element_text(size = 8))
+
+ggsave(g6, filename = file.path(plot_dir, 'apms_1_annotated_v_1_detected_fps.pdf'), units = 'in', height = 16, width = 12)
+```
+
+```{r}
+compared_tool_combos <- rbind(
+  n_tools_in_view_combos_ds %>%
+    gather(variable, value, -trial_id) %>%
+    mutate(source='fps1'),
+  n_tools_in_view_combos_30_fps_ds %>%
+    gather(variable, value, -trial_id) %>%
+    mutate(source='fps30')
+) %>% reshape2::dcast(trial_id + variable ~ source, value.var='value') %>%
+  mutate(fps1=ifelse(is.na(fps1), 0, fps1), fps30=ifelse(is.na(fps30), 0, fps30)) %>%
+  left_join(., apms_dataframe %>% dplyr::select(trial_id, total), by='trial_id') %>%
+  # mutate(fps1=fps1/total, fps30=fps30/(total*30)) %>%
+  mutate(fps1=fps1/total, fps30=fps30/(total)) %>%
+  mutate(n_tools=str_count(variable, "_")-4+1)
+
+g5 <- ggplot(compared_tool_combos %>% filter(n_tools == 2), aes(fps1, fps30)) +
+  geom_point(alpha=0.75) +
+  xlab('FPS 1') + ylab('FPS 30') +
+  stat_cor(method = "pearson") +
+  facet_wrap(~variable, scales='free', ncol = 3)
+
+ggsave(g5, filename = file.path(plot_dir, 'tool_combinations_1v1_annotated_fps.pdf'), units = 'in', height = 10, width = 8)
+```
+
+```{r}
+# Create our training and test splits (ground truth data) using the 30 fps detection data
+apms_30_fps_dataframe[is.na(apms_30_fps_dataframe)] <- 0
+
+apms_30_fps_fixed_c_names <- apms_30_fps_dataframe %>%
+  magrittr::set_colnames(gsub('\\(|\\)', '', colnames(.))) %>%
+  mutate(resolution=paste0(w, 'x', h))
+
+ebl.train.data <- apms_30_fps_fixed_c_names %>%
+  mutate(EBL=log2(EBL)) %>%
+  filter(trial_id %in% training_set) %>%
+  # dplyr::select(intersect(colnames(.), c('EBL', 'total', 'Group', 'endolast12mo', 'cadaverlast12', 'resolution', columns_to_use[1:11])))
+  dplyr::select(intersect(colnames(.), c('trial_id', 'EBL', 'total', 'Group', 'endolast12mo', 'cadaverlast12', 'resolution', columns_to_include)))
+
+ebl.test.data <- apms_30_fps_fixed_c_names %>% 
+  mutate(EBL=log2(EBL)) %>%
+  filter(trial_id %in% prediction_test_set) %>%
+  # dplyr::select(intersect(colnames(.), c('EBL', 'total', 'Group', 'endolast12mo', 'cadaverlast12', 'resolution', columns_to_use[1:11])))
+  dplyr::select(intersect(colnames(.), c('trial_id', 'EBL', 'total', 'Group', 'endolast12mo', 'cadaverlast12', 'resolution', columns_to_include)))
+
+ebl.complete.data <- rbind(ebl.train.data, ebl.test.data)
+
+ebl.train.data %<>% dplyr::select(-trial_id)
+ebl.test.data %<>% dplyr::select(-trial_id)
+
+retinanet_detection_ebl_accuracies <- NULL
+retinanet_predictions_ebl <- NULL
+```
+
+```{r}
+# Build baseline lm EBL from total frames
+lm.fit <- train(
+  EBL ~ total, data = ebl.train.data, method = "glm",
+  trControl = trainControl("cv", number = 10)
+)
+
+# Make predictions
+predictions <- lm.fit %>% predict(ebl.combined_data)
+retinanet_predictions_ebl %<>% rbind(data.frame(
+  pred=predictions, 
+  EBL=ebl.combined_data$EBL, 
+  trial_id=ebl.combined_data$trial_id, 
+  model='lm'))
+
+# Model prediction performance
+retinanet_detection_ebl_accuracies %<>% rbind(data.frame(
+  model = 'lm',
+  RMSE = retinanet_predictions_ebl %>% filter(trial_id %in% prediction_test_set) %$% RMSE(pred, EBL),
+  Rsquare = retinanet_predictions_ebl %>% filter(trial_id %in% prediction_test_set) %$% R2(pred, EBL)
+))
+```
+
+```{r}
+# Ridge regression
+ridge <- train(
+  EBL ~., data = ebl.train.data, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneGrid = expand.grid(alpha = 0, lambda = lambda)
+)
+
+# Make predictions
+predictions <- ridge %>% predict(ebl.combined_data)
+retinanet_predictions_ebl %<>% rbind(data.frame(
+  pred=predictions, 
+  EBL=ebl.combined_data$EBL, 
+  trial_id=ebl.combined_data$trial_id, 
+  model='ridge'))
+
+# Model prediction performance
+retinanet_detection_ebl_accuracies %<>% rbind(data.frame(
+  model = 'ridge',
+  RMSE = retinanet_predictions_ebl %>% filter(trial_id %in% prediction_test_set) %$% RMSE(pred, EBL),
+  Rsquare = retinanet_predictions_ebl %>% filter(trial_id %in% prediction_test_set) %$% R2(pred, EBL)
+))
+```
+
+```{r}
+# Build the model
+lasso <- train(
+  EBL ~., data = ebl.train.data, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneGrid = expand.grid(alpha = 1, lambda = lambda)
+)
+
+# Make predictions
+predictions <- lasso %>% predict(ebl.combined_data)
+retinanet_predictions_ebl %<>% rbind(data.frame(
+  pred=predictions, 
+  EBL=ebl.combined_data$EBL, 
+  trial_id=ebl.combined_data$trial_id, 
+  model='lasso'))
+
+# Model prediction performance
+retinanet_detection_ebl_accuracies %<>% rbind(data.frame(
+  model = 'lasso',
+  RMSE = retinanet_predictions_ebl %>% filter(trial_id %in% prediction_test_set) %$% RMSE(pred, EBL),
+  Rsquare = retinanet_predictions_ebl %>% filter(trial_id %in% prediction_test_set) %$% R2(pred, EBL)
+))
+```
+
+```{r}
+elastic <- train(
+  EBL ~., data = ebl.train.data, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneLength = 10
+  )
+
+# Make predictions
+predictions <- elastic %>% predict(ebl.combined_data)
+retinanet_predictions_ebl %<>% rbind(data.frame(
+  pred=predictions, 
+  EBL=ebl.combined_data$EBL, 
+  trial_id=ebl.combined_data$trial_id, 
+  model='elastic'))
+
+# Model prediction performance
+retinanet_detection_ebl_accuracies %<>% rbind(data.frame(
+  model = 'elastic',
+  RMSE = retinanet_predictions_ebl %>% filter(trial_id %in% prediction_test_set) %$% RMSE(pred, EBL),
+  Rsquare = retinanet_predictions_ebl %>% filter(trial_id %in% prediction_test_set) %$% R2(pred, EBL)
+))
+```
+
+```{r}
+models <- list(lm.basic = lm.fit, ridge = ridge, lasso = lasso, elastic = elastic)
+resamples(models) %>% summary( metric = "RMSE")
+
+# Combine coefficents into data frame
+detection_coef_df <- NULL
+for (m in names(models)) {
+  if (m %in% c('lm.basic', 'svm')) {
+    next()
+  }
+  
+  mod <- models[[m]]
+    
+  coef_m <- data.frame(coef(mod$finalModel, mod$bestTune$lambda)[,1]) %>%
+    as.data.frame() %>%
+    mutate(variable=row.names(.)) %>%
+    magrittr::set_colnames(c('value', 'variable')) %>%
+    mutate(source='EBL')
+  
+  row.names(coef_m) <- NULL
+  
+  detection_coef_df %<>% rbind(coef_m %>% mutate(model=m))
+}
+
+detection_coef_df %<>% 
+  mutate(v_type=case_when(
+    grepl('^frames_with', variable) ~ 'Proportion',
+    grepl('^first_frame', variable) ~ 'First Frame',
+    grepl('in_n_out', variable) ~ 'Tool Disappearances',
+    grepl('sd_[xy]', variable) ~ 'Coordinate variation',
+    grepl('sd_z', variable) ~ 'Coordinate variation (normalized)',
+    grepl('distance', variable) ~ 'Distance',
+    grepl('speed', variable) ~ 'Speed',
+    grepl('area', variable) ~ 'Area',
+    TRUE ~ 'Misc'
+  )) %>% filter(variable != '(Intercept)')
+```
+
+```{r}
+detection_ebl_df <- retinanet_predictions_ebl %>%
+  mutate(tg= ifelse(trial_id %in% prediction_test_set, 'test', 'train'))
+
+detection_ebl_df %>%
+  write.table(., file=file.path(data_dir, 'ebl_prediction_from_1fps_detection.csv'), sep=',', quote=F, row.names=F)
+
+g.detections.ebl.pred <- ggplot(detection_ebl_df,
+                  aes(EBL, pred, color=tg)) +
+  geom_point(aes(size=tg)) +
+  geom_abline(slope=1, linetype=2) +
+  xlab('Actual log2(EBL)') + ylab('Predicted log2(EBL)') + 
+  stat_cor(method = "pearson") +
+  facet_wrap(~model) +
+  scale_size_manual(values=c('test'=2, 'train'=0.5)) +
+  theme_bw() + 
+  theme(
+    legend.position='top',
+    legend.justification = 'left',
+    text = element_text(size=16),
+    axis.text = element_text(size=16),
+    axis.title = element_text(size=16)
+  )
+
+g.detections.ebl.pred
+
+# ggsave(g2, filename=file.path(plot_dir, 'predicted_ebl_apms_30_fps_detection.pdf'), units='in', height=4, width = 6)
+
+ggplot(predictions_ebl, aes(EBL, abs(pred-EBL))) +
+  geom_point() +
+  facet_wrap(~model) + 
+  theme_bw()
+```
+
+```{r}
+ggsave(g.detections.ebl.pred, filename = file.path(plot_dir, 'predicted_ebl_actual_using_1fps_detection_apms.pdf'), width = 6, height = 6, units='in')
+```
+
+```{r fig.height=12}
+detection_ebl_coef_plot_data <- detection_coef_df %>% 
+      left_join(., retinanet_detection_ebl_accuracies, by='model') %>%
+      mutate(model_name=paste0(model, ' RMSE: ', round(RMSE, 2)))
+
+detection_ebl_coef_plot_data %>%
+  write.table(., file = file.path(data_dir, 'ebl_coefficients_1fps_detection.csv'), sep=',', quote=F, row.names=F)
+
+g4 <- ggplot(detection_coef_df %>% 
+      left_join(., retinanet_detection_ebl_accuracies, by='model') %>%
+      mutate(model_name=paste0(model, ' RMSE: ', round(RMSE, 2))), 
+    aes(variable, value, fill=model_name)
+  ) +
+  geom_bar(stat = 'identity', position = position_dodge()) +
+  facet_wrap(~v_type, scales = 'free') +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle=90, vjust=0.5, hjust=1),
+    legend.position = 'top',
+    legend.justification = 'left',
+    legend.direction = 'vertical'
+  )
+
+g4
+
+ggsave(g4, filename = file.path(plot_dir, 'coefficients_ebl_from_1fps_detection_apms.pdf'), width = 10, height = 12, units='in')
+```
+
+Compare the variable weights in the Success prediction vs. EBL prediction models to see which variables are more relevant to one task vs. the other (and does this make sense)
+
+```{r eval=FALSE}
+combined_em_coefs <- rbind(
+  elastic_net_ebl_coefs,
+  elastic_net_success_coefs
+) %>% dcast(variable ~ source, value.var='value')
+
+model_coef_plot_data <- combined_em_coefs %>%
+  filter(abs(Success) > 0, abs(EBL) > 0)
+```

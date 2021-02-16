@@ -1,0 +1,682 @@
+---
+title: "Cohort Characterization"
+author: "Guillaume Kugener"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = F, message = F)
+```
+
+```{r child =  'apm_generation.Rmd'}
+```
+
+```{r include=F}
+require(Metrics)
+```
+
+## Looking at potential batch effects
+
+In the positional based APMs, there could be batch effects from the different resolutions used. If a disproportionate amount of successes were filmed in 1920 x 1080 vs. 1280 x 720, these tests could be picking up on that rather than actually picking up on differences in performance.
+
+To assess, we will perfrom t-tests comparing the two cohorts
+
+### Successes only
+
+Looking only at successful trials, do we see differences in the metrics when we split based on resolution
+
+```{r eval=FALSE}
+length(intersect(dg1280x720, c(paste0('S', training_successes, 'T1'), paste0('S', training_successes, 'T2'))))
+
+length(intersect(dg1920x1080, c(paste0('S', training_successes, 'T1'), paste0('S', training_successes, 'T2'))))
+```
+
+```{r}
+# summary(apms_dataframe)
+
+batch_successes_apms_test_p_vals <- apms_dataframe %>%
+  filter(Success==1) %>%
+  mutate(Group=ifelse(Group=='Attending', 1, 0)) %>%
+  gather(variable, value, -trial_id, -total, -w, -h, -Success, -TTH) %>%
+  # filter(grepl('', variable)) %>%
+  group_by(variable) %>%
+  dplyr::summarise(
+    m_dg1920x1080=mean(value[which(trial_id %in% dg1920x1080)], na.rm=T),
+    n_dg1920x1080=length(intersect(which(trial_id %in% dg1920x1080), which(!is.na(value)))),
+    m_dg1280x720=mean(value[which(trial_id %in% dg1280x720)], na.rm=T),
+    sd=sd(value, na.rm=T),
+    n_dg1280x720=length(intersect(which(trial_id %in% dg1280x720), which(!is.na(value)))),
+    p.value=t.test(value[which(trial_id %in% dg1920x1080)], value[which(trial_id %in% dg1280x720)])$p.value
+  )
+
+batch_success_dims <- batch_successes_apms_test_p_vals %>%
+  mutate(effect_size=m_dg1280x720-m_dg1920x1080) %>%
+  mutate(`es/sd`=(m_dg1280x720-m_dg1920x1080)/sd) %>%
+  dplyr::arrange(p.value)  %>%
+  dplyr::mutate(p.value=format(p.value, digits=3))
+
+batch_success_dims[,grep('^(m|sd|effect|es)', colnames(batch_success_dims))] %<>% apply(., 2, FUN = function(x) round(x, 3))
+
+batch_success_dims %>%
+  DT::datatable(options = list(scrollX=TRUE))
+```
+
+```{r eval=FALSE}
+# Plot the sd of everything 
+summary(apms_dataframe)
+
+pixel_based_metrics <- colnames(apms_dataframe) %>%
+  .[grep('^(area|sd|distance|tool_speed|overlap)', .)]
+
+pixel_based_plot_data <- apms_dataframe %>%
+  filter(Success==0) %>%
+  dplyr::select(c('trial_id', 'w', 'h', pixel_based_metrics)) %>%
+  gather(variable, value, -trial_id, -w, -h) %>%
+  mutate(g=paste0(w, 'x', h))
+
+ggplot(pixel_based_plot_data %>% filter(grepl('distance', variable)), aes(variable, value, fill=g)) +
+  geom_boxplot(outlier.colour = NA) +
+  geom_point(aes(color=g), position = position_jitterdodge(), size=0.25) +
+  theme(
+    legend.position = 'top',
+    legend.justification = 'left',
+    axis.text.x = element_text(angle=90, hjust=1, vjust = 0.5)
+  )
+```
+
+### Failures only
+
+Same thing as above but for failures only
+
+```{r}
+batch_failures_apms_test_p_vals <- apms_dataframe %>%
+  filter(Success==0) %>%
+  mutate(Group=ifelse(Group=='Attending', 1, 0)) %>%
+  gather(variable, value, -trial_id, -total, -w, -h, -Success, -TTH) %>%
+  group_by(variable) %>%
+  dplyr::summarise(
+    m_dg1920x1080=mean(value[which(trial_id %in% dg1920x1080)], na.rm = T),
+    n_dg1920x1080=length(intersect(which(trial_id %in% dg1920x1080), which(!is.na(value)))),
+    m_dg1280x720=mean(value[which(trial_id %in% dg1280x720)], na.rm = T),
+    n_dg1280x720=length(intersect(which(trial_id %in% dg1280x720), which(!is.na(value)))),
+    sd=sd(value, na.rm = T),
+    p.value=t.test(value[which(trial_id %in% dg1920x1080)], value[which(trial_id %in% dg1280x720)])$p.value
+  )
+
+batch_failures_dims <- batch_failures_apms_test_p_vals %>%
+  mutate(effect_size=m_dg1280x720-m_dg1920x1080) %>%
+  mutate(`es/sd`=effect_size/sd) %>%
+  dplyr::arrange(p.value) %>%
+  dplyr::mutate(p.value=format(p.value, digits=3))
+
+batch_failures_dims[,grep('^(m|sd|effect|es)', colnames(batch_failures_dims))] %<>% apply(., 2, FUN = function(x) round(x, 3))
+
+batch_failures_dims %>%
+  DT::datatable(options = list(scrollX=TRUE))
+```
+
+```{r eval=FALSE}
+head(apms_dataframe)
+
+ggplot(apms_dataframe %>% 
+    mutate(res=case_when(
+      trial_id %in% dg1280x720 ~ '1280x720', 
+      trial_id %in% dg1920x1080 ~ '1920x1080', 
+      TRUE ~ 'None')) %>%
+    filter(trial_id %in% c(paste0('S', training_successes, 'T1'), paste0('S', training_successes, 'T2'))) %>%
+    mutate(Success=factor(Success)), aes(sd_cx_suction, sd_cy_suction, color=Success)) +
+  geom_point() +
+  facet_wrap(~res)
+```
+
+## Successes vs. Failures
+
+### t-tests no correction
+
+t-tests comparing all successful trials vs. failures. Not correcting for any batch effects due to resolution
+
+```{r}
+apms_test_p_vals <- apms_dataframe %>%
+  mutate(Group=ifelse(Group=='Attending', 1, 0)) %>%
+  gather(variable, value, -trial_id, -total, -w, -h, -Success, -TTH) %>%
+  group_by(variable) %>%
+  dplyr::summarise(
+    m_fail=mean(value[which(Success==0)], na.rm = T),
+    n_fail=length(intersect(which(Success==0), which(!is.na(value)))),
+    m_success=mean(value[which(Success==1)], na.rm = T),
+    n_success=length(intersect(which(Success==1), which(!is.na(value)))),
+    sd=sd(value,na.rm=T),
+    p.value=t.test(value[which(Success==0)], value[which(Success==1)])$p.value
+  )
+
+s_v_f <- apms_test_p_vals %>%
+  mutate(effect_size=m_success-m_fail) %>%
+  mutate(`es/sd`=effect_size/sd) %>%
+  dplyr::arrange(p.value) %>%
+  dplyr::mutate(p.value=format(p.value, digits=3))
+
+s_v_f[,grep('^(m|sd|effect|es)', colnames(s_v_f))] %<>% apply(., 2, FUN = function(x) round(x, 3))
+
+s_v_f %>%
+  write.table(., file = '~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/apm-characterization/plots/apms_success_v_failure.tsv', row.names=F, quote=F, sep = '\t')
+
+s_v_f %>%
+  DT::datatable(options = list(scrollX=TRUE))
+```
+
+### Correcting for batch effects
+
+For this, we fit a linear model that includes a parameter for resolution and a parameter for the independent variable. The effect size reported is the coefficient of the variable and the p-value is its significance
+
+```{r include=FALSE}
+fit_model_with_correction <- function(data, dep_var='Success') {
+  # Write the formula
+  model_formula <- as.formula(paste0('value~res+', dep_var))
+  
+  # print(model_formula)
+  
+  model_res <- lm(model_formula, data=data %>% mutate(res=factor(res))) %>% 
+    summary() %>% 
+    coefficients()
+
+  # print(which(data[,dep_var]==0))
+  
+  mean0 <- mean(data$value[which(data[,dep_var]==0)])
+  mean1 <- mean(data$value[which(data[,dep_var]==1)])
+  
+  # print(mean0)
+    
+  out <- data.frame(
+    variable=unique(data$variable), 
+    resolution_estimate=model_res[2,1], resolution_p=model_res[2,4],
+    dep_estimate=model_res[3,1], dep_p=model_res[3,4],
+    n_dep=length(which(data[,dep_var]==1)), 
+    m0=mean0, m1=mean1
+  ) %>% magrittr::set_colnames(
+    c(
+      'variable', 
+      'resolution_estimate', 
+      'resolution_p', 
+      'dep_estimate', 
+      'dep_p', 
+      paste0(dep_var, '=1 (n)'), 
+      paste0('mean ', dep_var, '=0'), 
+      paste0('mean ', dep_var, '=1')))
+  
+  return(out)
+}
+
+
+apms_lm_p_vals <- apms_dataframe %>%
+  mutate(res=case_when(
+      trial_id %in% dg1280x720 ~ '1280x720', 
+      trial_id %in% dg1920x1080 ~ '1920x1080', 
+      TRUE ~ 'None')) %>%
+  mutate(Group=ifelse(Group=='Attending', 1, 0)) %>%
+  gather(variable, value, -trial_id, -total, -w, -h, -Success, -TTH, -res) %>%
+  # filter(variable=='Group') %>%
+  group_by(variable) %>%
+  dplyr::do(fit_model_with_correction(data=., dep_var='Success'))
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+apms_lm_p_vals[,grep('estimate|mean', colnames(apms_lm_p_vals))] %<>% apply(., 2, FUN = function(x) round(x, 3))
+
+apms_lm_p_vals %>%
+  arrange(dep_p) %>%
+  dplyr::mutate(dep_p=format(dep_p, digits=3)) %>%
+  dplyr::mutate(resolution_p=format(resolution_p, digits=3)) %>%
+  datatable(options=list(scrollX=T))
+```
+
+## Training Successes T1 vs. T2
+
+t-tests comparing T1 vs. T2 in training successes. No batch effect correction used
+
+```{r}
+# Get the training successes and compare their trial 1s vs. their trial 2s
+training_successes_t1_vs_t2 <- apms_dataframe %>%
+  mutate(Group=ifelse(Group=='Attending', 1, 0)) %>%
+  filter(trial_id %in% c(paste0('S', training_successes, 'T1'), paste0('S', training_successes, 'T2'))) %>%
+  # filter out trial that is unpaired
+  filter(!(trial_id %in% unpaired_t1s)) %>% # These don't have a matched T2
+  gather(variable, value, -trial_id, -total, -w, -h, -Success, -TTH) %>%
+  group_by(variable) %>%
+  dplyr::summarise(
+    t1=mean(value[which(Success==0)], na.rm = T),
+    n_t1=length(intersect(which(Success==0), which(!is.na(value)))),
+    t2=mean(value[which(Success==1)], na.rm = T),
+    n_t2=length(intersect(which(Success==1), which(!is.na(value)))),
+    sd=sd(value, na.rm=T),
+    p.value=t.test(
+      (value[which(Success==0)] %>% .[order(trial_id)]), 
+      (value[which(Success==1)] %>% .[order(trial_id)]), 
+      paired = TRUE
+      )$p.value
+  )
+
+ts_t1_v_t2 <- training_successes_t1_vs_t2 %>%
+  mutate(effect_size=t2-t1) %>%
+  mutate(`es/sd`=effect_size/sd) %>%
+  dplyr::arrange(p.value) %>%
+  dplyr::mutate(p.value=format(p.value, digits=3))
+
+ts_t1_v_t2[,grep('^(t1|t2|m|sd|effect|es)', colnames(ts_t1_v_t2))] %<>% apply(., 2, FUN = function(x) round(x, 3))
+
+ts_t1_v_t2 %>%
+  write.table(., file = '~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/apm-characterization/plots/successes_t1_v_t2.tsv', quote=F, row.names=F, sep = '\t')
+
+ts_t1_v_t2 %>%
+  DT::datatable(options=list(scrollX=TRUE))
+```
+
+## Training Success vs. Pros
+
+t-test Training Successes T2 vs. Pros T2. No batch correction used
+
+```{r}
+# Compare the training success trial 2 to pros (combined trial 1 and 2)
+pros_v_training_success_t2 <- apms_dataframe %>%
+  mutate(Group=ifelse(Group=='Attending', 1, 0)) %>%
+  filter(trial_id %in% c(paste0('S', training_successes, 'T2'), paste0('S', pros, 'T2'))) %>%
+  mutate(Split=ifelse(trial_id %in% paste0('S', training_successes, 'T2'), 'Success', 'Pro')) %>%
+  # filter out trial that is unpaired
+  filter(!(trial_id %in% unpaired_t1s)) %>%
+  gather(variable, value, -trial_id, -total, -w, -h, -Success, -TTH, -Split) %>%
+  group_by(variable) %>%
+  dplyr::summarise(
+    TS=mean(value[which(Split=='Success')], na.rm = T),
+    Pro=mean(value[which(Split=='Pro')], na.rm = T),
+    n_TS=length(intersect(which(Split=='Success'), which(!is.na(value)))),
+    n_Pro=length(intersect(which(Split=='Pro'), which(!is.na(value)))),
+    sd=sd(value, na.rm=T),
+    p.value=t.test(
+      value[which(Split=='Success')], 
+      value[which(Split=='Pro')]
+      )$p.value
+  )
+
+p_vs_ts_t2 <- pros_v_training_success_t2 %>%
+  mutate(effect_size=Pro-TS) %>%
+  mutate(`es/sd`=effect_size/sd) %>%
+  dplyr::arrange(p.value) %>%
+  dplyr::mutate(p.value=format(p.value, digits=3))
+
+p_vs_ts_t2[,grep('^(TS|Pro|m|sd|effect|es)', colnames(p_vs_ts_t2))] %<>% apply(., 2, FUN = function(x) round(x, 3))
+
+p_vs_ts_t2 %>%
+  write.table(., file = '~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/apm-characterization/plots/t2s_successes_vs_pros.tsv', quote=F, row.names=F, sep = '\t')
+
+p_vs_ts_t2 %>%
+  DT::datatable(options=list(scrollX=TRUE))
+```
+
+## Attendings vs. Trainees
+
+None of this analysis uses batch correction
+
+### All trials
+
+t-tests comparing attendings vs. trainees for all trials
+
+```{r}
+attending_vs_resident <- apms_dataframe %>%
+  gather(variable, value, -trial_id, -total, -w, -h, -Success, -TTH, -Group) %>%
+  group_by(variable) %>%
+  dplyr::summarise(
+    Attending=mean(value[which(Group=='Attending')], na.rm = T),
+    Trainee=mean(value[which(Group=='Trainee')], na.rm = T),
+    n_A=length(intersect(which(Group=='Attending'), which(!is.na(value)))),
+    n_T=length(intersect(which(Group=='Trainee'), which(!is.na(value)))),
+    sd=sd(value, na.rm=T),
+    p.value=t.test(
+      value[which(Group=='Attending')], 
+      value[which(Group=='Trainee')]
+      )$p.value
+  )
+
+a_v_r_all_trials <- attending_vs_resident %>%
+  mutate(effect_size=Attending-Trainee) %>%
+  mutate(`es/sd`=effect_size/sd) %>%
+  dplyr::arrange(p.value) %>%
+  dplyr::mutate(p.value=format(p.value, digits=3))
+
+a_v_r_all_trials[,grep('^(Attending|Trainee|m|sd|effect|es)', colnames(a_v_r_all_trials))] %<>% apply(., 2, FUN = function(x) round(x, 3))
+
+a_v_r_all_trials %>%
+  write.table(., file = '~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/apm-characterization/plots/attending_v_trainee.tsv', quote=F, row.names=F, sep = '\t')
+
+a_v_r_all_trials %>%
+  DT::datatable(options=list(scrollX=TRUE))
+```
+
+### T1 only
+
+```{r}
+# Attending vs. resident trial 1 only
+attending_vs_resident_t1_only <- apms_dataframe %>%
+  filter(grepl('T1$', trial_id)) %>%
+  gather(variable, value, -trial_id, -total, -w, -h, -Success, -TTH, -Group) %>%
+  group_by(variable) %>%
+  dplyr::summarise(
+    Attending=mean(value[which(Group=='Attending')], na.rm = T),
+    Trainee=mean(value[which(Group=='Trainee')], na.rm = T),
+    n_A=length(intersect(which(Group=='Attending'), which(!is.na(value)))),
+    n_T=length(intersect(which(Group=='Trainee'), which(!is.na(value)))),
+    sd=sd(value, na.rm=T),
+    p.value=t.test(
+      value[which(Group=='Attending')], 
+      value[which(Group=='Trainee')]
+      )$p.value
+  )
+
+a_v_r_t1 <- attending_vs_resident_t1_only %>%
+  mutate(effect_size=Attending-Trainee) %>%
+  mutate(`es/sd`=effect_size/sd) %>%
+  dplyr::arrange(p.value) %>%
+  dplyr::mutate(p.value=format(p.value, digits=3))
+
+a_v_r_t1[,grep('^(Attending|Trainee|m|sd|effect|es)', colnames(a_v_r_t1))] %<>% apply(., 2, FUN = function(x) ifelse(is.na(x), NA, round(x, 3)))
+
+a_v_r_t1 %>%
+  write.table(., file = '~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/apm-characterization/plots/attending_v_trainee_t1_only.tsv', quote=F, row.names=F, sep = '\t')
+
+a_v_r_t1 %>%
+  DT::datatable(options=list(scrollX=TRUE))
+```
+
+### Trial 2 only
+
+```{r}
+# Attending vs. resident trial 2 only
+attending_vs_resident_t2_only <- apms_dataframe %>%
+  filter(grepl('T2$', trial_id)) %>%
+  gather(variable, value, -trial_id, -total, -w, -h, -Success, -TTH, -Group) %>%
+  group_by(variable) %>%
+  dplyr::summarise(
+    Attending=mean(value[which(Group=='Attending')], na.rm = T),
+    Trainee=mean(value[which(Group=='Trainee')], na.rm = T),
+    n_A=length(intersect(which(Group=='Attending'), which(!is.na(value)))),
+    n_T=length(intersect(which(Group=='Trainee'), which(!is.na(value)))),
+    sd=sd(value, na.rm=T),
+    p.value=t.test(
+      value[which(Group=='Attending')], 
+      value[which(Group=='Trainee')]
+      )$p.value
+  )
+
+a_v_r_t2 <- attending_vs_resident_t2_only %>%
+  mutate(effect_size=Attending-Trainee) %>%
+  mutate(`es/sd`=effect_size/sd) %>%
+  dplyr::arrange(p.value) %>%
+  dplyr::mutate(p.value=format(p.value, digits=3))
+
+a_v_r_t2[,grep('^(Attending|Trainee|m|sd|effect|es)', colnames(a_v_r_t2))] %<>% apply(., 2, FUN = function(x) round(x, 3))
+
+a_v_r_t2 %>%
+  write.table(., file = '~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/apm-characterization/plots/attending_v_trainee_t2_only.tsv', quote=F, row.names=F, sep = '\t')
+
+a_v_r_t2 %>%
+  DT::datatable(options=list(scrollX=TRUE))
+```
+
+## APMs vs. EBL
+
+We are also interested in seeing which APMs are correlated with EBL. Below is a simple pearson correlation between each APM calculated and EBL reported for that trial
+
+```{r}
+apms_ebl_correlation <- apms_dataframe %>%
+  mutate(Group=ifelse(Group=='Attending', 1, 0)) %>%
+  gather(variable, value, -trial_id, -total, -w, -h, -Success, -TTH, -EBL) %>%
+  # filter(variable=='Group') %>%
+  group_by(variable) %>%
+  dplyr::summarise(
+    cor=cor.test(value, EBL)$estimate,
+    p=cor.test(value, EBL)$p.value
+  )
+
+apms_ebl_correlation %>%
+  arrange(p) %>%
+  mutate(cor=round(cor, 3)) %>%
+  mutate(p=format(p, digits=3)) %>%
+  datatable(options=list(scrollX=TRUE))
+```
+
+```{r}
+require(ggarrange)
+require(ggpubr)
+# Figures for EBL vs. APMs
+disappearances_total_ebl <- ggplot(apms_dataframe, aes(total_in_n_outs, EBL)) +
+  geom_point() +
+  geom_smooth(method='lm')
+
+disappearances_suction_ebl <- ggplot(apms_dataframe, aes(n_in_n_outs_suction, EBL)) +
+  geom_point() +
+  geom_smooth(method='lm')
+
+disappearances_grasper_ebl <- ggplot(apms_dataframe, aes(n_in_n_outs_grasper, EBL)) +
+  geom_point() +
+  geom_smooth(method='lm')
+
+cottonoid_ebl<- ggplot(apms_dataframe, aes(frames_with_cottonoid, EBL)) +
+  geom_point() +
+  geom_smooth(method='lm')
+
+ggpubr::ggarrange(
+  disappearances_total_ebl, disappearances_suction_ebl,
+  disappearances_grasper_ebl, cottonoid_ebl, 
+  ncol = 2, nrow = 2
+)
+```
+
+```{r eval=FALSE}
+# Tool proportions model trained on full video predict blood loss on different # of frames
+proportion_of_tool_use_frames <- colnames(apms_dataframe) %>% 
+  .[grep('^frames_with_(suction|cottonoid|grasper|muscle|string)$', .)] %>%
+  gsub('tool\\(s\\)', 'tools', .)
+
+ebl_prediction_formula <- as.formula(paste0('EBL~', paste0(proportion_of_tool_use_frames, collapse = '+')))
+
+ebl_predict_df <- apms_dataframe %>%
+  magrittr::set_colnames(gsub('tool\\(s\\)', 'tools', colnames(.))) %>%
+  dplyr::select(c('trial_id', 'EBL', proportion_of_tool_use_frames))
+
+# Remove any rows with NAs
+ebl_predict_df <- ebl_predict_df[complete.cases(ebl_predict_df),]
+
+# test set
+test_ids <- apms_dataframe %>%
+  distinct(trial_id, Success) %>%
+  mutate(group=gsub('[0-9]T.*', '', trial_id)) %>%
+  group_by(group, Success) %>%
+  dplyr::mutate(count=n()) %>%
+  filter(group %in% c('S31', 'S40')) %$%
+  trial_id
+
+train_ids <- setdiff(apms_dataframe$trial_id, test_ids)
+
+lm_predict_blood_loss <- lm(ebl_prediction_formula, data = ebl_predict_df %>% filter(trial_id %in% train_ids))
+
+# RMSE and R2 from predictions
+ebl_predictions_lm <- ebl_predict_df %>%
+  filter(trial_id %in% test_ids)
+
+ebl_predictions_lm$prediction <- predict(lm_predict_blood_loss, newdata = ebl_predictions_lm)
+```
+
+<!-- Predicted EBL vs. actual EBL on the test set of trials (trial IDs 31X and 40X). Training was done with r length(train_ids) trials. Variables are the proportion of tool use in the trial -->
+
+```{r eval=FALSE}
+# Result plotted
+ggplot(ebl_predictions_lm, aes(EBL, prediction)) +
+  geom_point() +
+  geom_abline(slope = 1, linetype=2) +
+  annotate(
+    'text', x = 0, y = max(ebl_predictions_lm$prediction),
+    label=paste0('RMSE: ', round(rmse(predicted = ebl_predictions_lm$prediction, actual = ebl_predictions_lm$EBL), 3)),
+    hjust=0, vjust=1
+  ) + annotate(
+    'text', x = 0, y = max(ebl_predictions_lm$prediction)-50, 
+    label=paste0('Adj. R2: ', round(summary(lm_predict_blood_loss)$adj.r.squared, 3)),
+    hjust=0, vjust=1
+  ) + theme_bw()
+```
+
+<!-- Predicting EBL using the proportion of tool use looking at the first n frames using the model trained above. -->
+
+```{r eval=FALSE}
+# Now need to make loop that gets data for the first n frames
+apms_first_n_frames <- NULL
+for (n_frames in seq(15, 135, 15)) {
+  apms_clean_df <- apms_dataframe %>%
+    dplyr::select(trial_id, total, EBL)
+  
+  # Frames each tool used
+  apms_clean_df %<>% left_join(
+    ., 
+    gt_fps1 %>%
+      filter(frame <= n_frames) %>%
+      filter(tool %in% tools_of_interest) %>%
+      group_by(trial_id, tool) %>%
+      dplyr::summarise(count=length(unique(short_file_name))/n_frames) %>%
+      ungroup() %>%
+      dplyr::mutate(tool=paste0('frames_with_', tool)) %>%
+      dcast(trial_id ~ tool, value.var='count'),
+    by = 'trial_id')
+    
+    apms_clean_df[is.na(apms_clean_df)] <- 0 # If NA, set to 0
+  
+    # Now run the prediction on all the data
+    apms_clean_df$predicted_ebl <- predict(lm_predict_blood_loss, newdata = apms_clean_df)
+    apms_clean_df$first_n_frames <- n_frames
+    
+    apms_first_n_frames %<>% rbind(apms_clean_df)
+}
+
+rmse_first_n_frames <- apms_first_n_frames %>%
+  group_by(first_n_frames) %>%
+  dplyr::summarise(rmse=rmse(predicted = predicted_ebl, actual=EBL))
+```
+
+```{r eval=FALSE}
+ggplot(apms_first_n_frames, aes(EBL, predicted_ebl)) +
+  geom_point() +
+  geom_text(data=rmse_first_n_frames, aes(x=0, y=max(apms_first_n_frames$predicted_ebl), label=round(rmse, 3)), hjust=0, vjust=0) +
+  facet_wrap(~first_n_frames) +
+  theme_bw()
+```
+
+
+<!-- ## Success vs. Failure Visualizations -->
+
+<!-- Simple scatter plot of the tool locations for successes and failures  -->
+
+```{r eval=FALSE}
+trials_ids_ordered_tth <- total_frames_by_trial %>%
+  arrange(total) %$% 
+  trial_id
+
+# x-y plot success vs. failure
+scatter_plot_test <- gt_fps1 %>% 
+  # filter(trial_id %in% c('S303T1', 'S303T2')) %>%
+  left_join(., frame_dimensions %>% dplyr::select(trial_id, w, h), by='trial_id') %>%
+  left_join(., outcomes_relevant, by='trial_id') %>%
+  mutate(Success=ifelse(Success==1, 'Success', 'Failure')) %>%
+  mutate(trial_id=factor(trial_id, levels=trials_ids_ordered_tth))
+
+# For suction and grasper -> we will do tool tip (mid point of top row)
+# For cottonoid and muscle -> we will do the center
+# We will ignore all other tools for now
+
+parsed_data <- scatter_plot_test %>%
+  filter(tool %in% c('suction', 'grasper', 'cottonoid', 'muscle')) %>%
+  mutate(plot_y=case_when(
+    tool %in% c('suction', 'grasper') ~ 1-y1/h,
+    TRUE ~ 1-((y1+y2)/2)/h
+  ), plot_x=(x1+x2)/2/w)
+
+plot_scatter_tool_use <- function(data, fn) {
+  g1 <- ggplot(data, aes(plot_x, plot_y, color=tool)) +
+    geom_point() +
+    scale_x_continuous(limits = c(0,1)) +
+    scale_y_continuous(limits = c(0,1)) +
+    facet_wrap(~trial_id) +
+    theme_bw() +
+    theme(
+      legend.position = 'top',
+      legend.justification = 'left'
+    )
+  
+  ggsave(g1, filename = file.path(plot_dir, 'scatters-tools', fn), width = 8, height = 10)
+
+}
+
+# All tools
+plot_scatter_tool_use(
+  data = parsed_data %>% filter(Success=='Failure'),
+  fn = 'failures_scatter.pdf')
+
+plot_scatter_tool_use(
+  data = parsed_data %>% filter(Success=='Success'),
+  fn = 'successes_scatter.pdf')
+
+# Each tool split
+for (to in c('suction', 'grasper', 'cottonoid', 'muscle')) {
+  plot_scatter_tool_use(
+    data = parsed_data %>% filter(Success=='Failure', tool==to),
+    fn = paste0(to, '_failure_scatter.pdf')
+  )
+  
+  plot_scatter_tool_use(
+    data = parsed_data %>% filter(Success=='Success', tool==to),
+    fn = paste0(to, '_success_scatter.pdf')
+  )
+}
+```
+
+```{r eval=FALSE}
+# Training successes, single plot side by side for easy interpretation
+rescues_t1 <- training_successes %>% paste0('S', ., 'T1')
+rescues_t2 <- training_successes %>% paste0('S', ., 'T2')
+
+paired_order <- c(
+  rescues_t1 %>% intersect(., parsed_data$trial_id) %>% setdiff(., unpaired_t1s),
+  rescues_t2 %>% intersect(., parsed_data$trial_id)
+) %>% .[order(.)]
+
+resuces_plot_data <- parsed_data %>%
+  filter(trial_id %in% paired_order) %>%
+  mutate(trial_id=factor(trial_id, levels=paired_order))
+
+rescues_all <- ggplot(resuces_plot_data, aes(plot_x, plot_y, color=tool)) +
+    geom_point() +
+    scale_x_continuous(limits = c(0,1)) +
+    scale_y_continuous(limits = c(0,1)) +
+    facet_wrap(~trial_id, ncol=2) +
+    theme_bw() +
+    theme(
+      legend.position = 'top',
+      legend.justification = 'left'
+    )
+
+ggsave(
+  rescues_all,
+  filename = file.path(plot_dir, 'scatters-tools', 'training_rescues_scatter.pdf'), 
+  width = 4, height = 24)
+  
+for (to in c('suction', 'grasper', 'cottonoid', 'muscle')) {
+  r_tool <- ggplot(resuces_plot_data %>% filter(tool==to), aes(plot_x, plot_y, color=tool)) +
+    geom_point() +
+    scale_x_continuous(limits = c(0,1)) +
+    scale_y_continuous(limits = c(0,1)) +
+    facet_wrap(~trial_id, ncol=2) +
+    theme_bw() +
+    theme(
+      legend.position = 'top',
+      legend.justification = 'left'
+    )
+  
+  ggsave(r_tool, filename = file.path(plot_dir, 'scatters-tools', paste0(to, '_training_rescues_scatter.pdf')), width = 4, height = 24)
+}
+```
