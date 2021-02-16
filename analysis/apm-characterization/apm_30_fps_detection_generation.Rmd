@@ -15,7 +15,14 @@ require(DT)
 ```
 
 ```{r}
-plot_dir <- '~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/apm-characterization/plots/'
+plot_dir <- '~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/apm-characterization/20210205/plots/'
+data_dir <- plot_dir %>% gsub('plots', 'data', .)
+
+# We use the same script for 30 fps detection and 1 fps detection APM generation 
+retinanet_30_fps_dir <- '~/Documents/USC/USC_docs/ml/datasets/fps-1-detection/'
+fr_detection <- stringr::str_extract(pattern = 'fps\\-[0-9]+\\-detection', string=retinanet_30_fps_dir) %>%
+  stringr::str_extract(pattern='[0-9]+', string=.) %>%
+  as.numeric()
 ```
 
 # Cohort Characterization with APMs from 30 fps detection
@@ -55,13 +62,13 @@ prep_for_precision_recall_curve <- function(df, total_positives) {
 
 ```{r}
 # Load ground truth 1 fps data
-gt_fps1 <- read_csv('~/Documents/USC/USC_docs/ml/datasets/fps-1-uncropped-previous/ImageSets/Main/retinanet_surgical_1fps_complete.csv',
+gt_fps1 <- read_csv('~/Documents/USC/USC_docs/ml/datasets/fps-1-uncropped/ImageSets/Main/retinanet_surgical_1fps_complete.csv',
   col_names = c('file', 'x1', 'y1', 'x2', 'y2', 'tool')) %>%
   mutate(short_file_name=gsub('.*/', '', file)) %>%
   mutate(trial_id=gsub('[a-z]?_.*', '', short_file_name)) %>%
   mutate(frame=as.numeric(stringr::str_extract(pattern='[0-9]+', string=gsub('.*_', '', short_file_name))))
 
-gt_fps1_test_only <- read_csv('~/Documents/USC/USC_docs/ml/datasets/fps-1-uncropped-previous/ImageSets/Main/retinanet_surgical_1fps_test.csv',
+gt_fps1_test_only <- read_csv('~/Documents/USC/USC_docs/ml/datasets/fps-1-uncropped/ImageSets/Main/retinanet_surgical_1fps_test.csv',
   col_names = c('file', 'x1', 'y1', 'x2', 'y2', 'tool')) %>%
   mutate(short_file_name=gsub('.*/', '', file)) %>%
   mutate(trial_id=gsub('[a-z]?_.*', '', short_file_name)) %>%
@@ -70,13 +77,13 @@ gt_fps1_test_only <- read_csv('~/Documents/USC/USC_docs/ml/datasets/fps-1-uncrop
 # Will need to calculate proportions
 total_frames_by_trial <- gt_fps1 %>%
   group_by(trial_id) %>%
-  dplyr::summarise(total=length(unique(short_file_name))*30)
+  dplyr::summarise(total=length(unique(short_file_name))*fr_detection)
 ```
 
 ```{r}
 # We are also interested to see how our models perform using the output from the 30 fps detections
 classes_of_interest <- c('suction', 'grasper', 'cottonoid', 'muscle', 'string' , 'drill', 'tool', 'scalpel')
-retinanet_1_fps_results <- read_csv(file.path(save_location_results, 'test_retinanet_pred_retina_style.csv')) %>%
+retinanet_1_fps_results <- read_csv(file.path('~/Documents/USC/USC_docs/ml/surgical-training-project/data/auto-label/20210205/', 'test_retinanet_pred_retina_style.csv')) %>%
   filter(class %in% classes_of_interest) %>%
   mutate(pred_type=ifelse(tp == 1, 'TP', ifelse(fp == 1, 'FP', 'Other')))
 
@@ -122,7 +129,6 @@ ggplot(retinanet_1_fps_results, aes(score, fill=pred_type)) +
 
 ```{r include=FALSE}
 # Load the detections
-retinanet_30_fps_dir <- '~/Documents/USC/USC_docs/ml/datasets/fps-30-detection/'
 rn_30_files <- list.files(retinanet_30_fps_dir)
 retinanet_30_fps_results <- NULL
 
@@ -670,4 +676,10 @@ apms_30_fps_dataframe[,grep('^frames_', colnames(apms_30_fps_dataframe))] <- apm
 # Quadrant dwell time - need to figure out how to normalize (or else just becomes a proxy for tool use)
 # apms_dataframe[,grep('^quadrant_', colnames(apms_dataframe))] <- apms_dataframe[,grep('^quadrant_', colnames(apms_dataframe))]/apms_dataframe$total
 # apms_dataframe[,grep('^n_in_n_outs', colnames(apms_dataframe))] <- apms_dataframe[,grep('^n_in_n_outs', colnames(apms_dataframe))]/apms_dataframe$total
+```
+
+```{r}
+write.table(
+  apms_30_fps_dataframe, file = file.path(data_dir, paste0('apms_detection_', fr_detection, 'fps.csv')), sep = ',', row.names = F, quote=F
+)
 ```

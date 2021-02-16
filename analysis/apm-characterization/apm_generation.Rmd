@@ -15,7 +15,8 @@ require(DT)
 ```
 
 ```{r}
-plot_dir <- '~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/apm-characterization/plots/'
+plot_dir <- '~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/apm-characterization/20210205/plots'
+data_dir <- plot_dir %>% gsub('plots', 'data', .)
 ```
 
 # Cohort Characterization with APMs
@@ -24,7 +25,7 @@ In a previous manuscript, we characterized similarities and differences in the d
 
 ```{r include=FALSE}
 # Frame dimensions
-frame_dimensions <- read_csv('~/Documents/USC/USC_docs/ml/datasets/fps-1-uncropped-previous/image_sizes.csv')
+frame_dimensions <- read_csv('~/Documents/USC/USC_docs/ml/datasets/fps-1-uncropped/image_sizes.csv')
 
 dimensions_grouping <- frame_dimensions %>%
   mutate(gname=paste0(w, 'x', h))
@@ -35,7 +36,7 @@ dg1280x720 <- dimensions_grouping %>% filter(gname=='1280x720') %$% trial_id
 
 ```{r include=FALSE}
 # Load ground truth 1 fps data
-gt_fps1 <- read_csv('~/Documents/USC/USC_docs/ml/datasets/fps-1-uncropped-previous/ImageSets/Main/retinanet_surgical_1fps_complete.csv',
+gt_fps1 <- read_csv('~/Documents/USC/USC_docs/ml/datasets/fps-1-uncropped/ImageSets/Main/retinanet_surgical_1fps_complete.csv',
   col_names = c('file', 'x1', 'y1', 'x2', 'y2', 'tool')) %>%
   mutate(short_file_name=gsub('.*/', '', file)) %>%
   mutate(trial_id=gsub('[a-z]?_.*', '', short_file_name)) %>%
@@ -119,6 +120,7 @@ apms_dataframe <- total_frames_by_trial %>%
   left_join(., frame_dimensions %>% dplyr::select(trial_id, w, h), by = 'trial_id') %>%
   left_join(.,outcomes_relevant, by = 'trial_id')
 
+# This removes trials that are not in the outcomes data (there are a handful of trials in the 100s)
 apms_dataframe %<>% filter(!is.na(Success))
 ```
 
@@ -720,4 +722,10 @@ apms_dataframe[,grep('^frames_', colnames(apms_dataframe))] <- apms_dataframe[,g
 # Quadrant dwell time - need to figure out how to normalize (or else just becomes a proxy for tool use)
 # apms_dataframe[,grep('^quadrant_', colnames(apms_dataframe))] <- apms_dataframe[,grep('^quadrant_', colnames(apms_dataframe))]/apms_dataframe$total
 # apms_dataframe[,grep('^n_in_n_outs', colnames(apms_dataframe))] <- apms_dataframe[,grep('^n_in_n_outs', colnames(apms_dataframe))]/apms_dataframe$total
+```
+
+```{r}
+write.table(
+  apms_dataframe, file = file.path(data_dir, paste0('apms_detection_annotated_1_fps.csv')), sep = ',', row.names = F, quote=F
+)
 ```

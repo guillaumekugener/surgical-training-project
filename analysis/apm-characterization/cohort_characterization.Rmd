@@ -1,15 +1,19 @@
 ---
 title: "Cohort Characterization"
 author: "Guillaume Kugener"
-date: "1/26/2021"
+date: "`r Sys.Date()`"
 output: html_document
 ---
 
 ```{r include=FALSE}
-knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(echo = FALSE, warning = F, message = F)
 ```
 
 ```{r child =  'apm_generation.Rmd'}
+```
+
+```{r include=F}
+require(Metrics)
 ```
 
 ## Looking at potential batch effects
@@ -466,9 +470,7 @@ ggpubr::ggarrange(
 )
 ```
 
-```{r}
-require(Metrics)
-
+```{r eval=FALSE}
 # Tool proportions model trained on full video predict blood loss on different # of frames
 proportion_of_tool_use_frames <- colnames(apms_dataframe) %>% 
   .[grep('^frames_with_(suction|cottonoid|grasper|muscle|string)$', .)] %>%
@@ -503,9 +505,9 @@ ebl_predictions_lm <- ebl_predict_df %>%
 ebl_predictions_lm$prediction <- predict(lm_predict_blood_loss, newdata = ebl_predictions_lm)
 ```
 
-Predicted EBL vs. actual EBL on the test set of trials (trial IDs 31X and 40X). Training was done with `r length(train_ids)` trials. Variables are the proportion of tool use in the trial
+<!-- Predicted EBL vs. actual EBL on the test set of trials (trial IDs 31X and 40X). Training was done with r length(train_ids) trials. Variables are the proportion of tool use in the trial -->
 
-```{r}
+```{r eval=FALSE}
 # Result plotted
 ggplot(ebl_predictions_lm, aes(EBL, prediction)) +
   geom_point() +
@@ -521,9 +523,9 @@ ggplot(ebl_predictions_lm, aes(EBL, prediction)) +
   ) + theme_bw()
 ```
 
-Predicting EBL using the proportion of tool use looking at the first n frames using the model trained above.
+<!-- Predicting EBL using the proportion of tool use looking at the first n frames using the model trained above. -->
 
-```{r}
+```{r eval=FALSE}
 # Now need to make loop that gets data for the first n frames
 apms_first_n_frames <- NULL
 for (n_frames in seq(15, 135, 15)) {
@@ -557,7 +559,7 @@ rmse_first_n_frames <- apms_first_n_frames %>%
   dplyr::summarise(rmse=rmse(predicted = predicted_ebl, actual=EBL))
 ```
 
-```{r}
+```{r eval=FALSE}
 ggplot(apms_first_n_frames, aes(EBL, predicted_ebl)) +
   geom_point() +
   geom_text(data=rmse_first_n_frames, aes(x=0, y=max(apms_first_n_frames$predicted_ebl), label=round(rmse, 3)), hjust=0, vjust=0) +
@@ -566,9 +568,9 @@ ggplot(apms_first_n_frames, aes(EBL, predicted_ebl)) +
 ```
 
 
-## Success vs. Failure Visualizations
+<!-- ## Success vs. Failure Visualizations -->
 
-Simple scatter plot of the tool locations for successes and failures 
+<!-- Simple scatter plot of the tool locations for successes and failures  -->
 
 ```{r eval=FALSE}
 trials_ids_ordered_tth <- total_frames_by_trial %>%
