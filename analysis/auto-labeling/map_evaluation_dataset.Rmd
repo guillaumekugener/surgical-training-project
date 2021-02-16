@@ -17,9 +17,9 @@ library(ggpubr)
 # Surgical Auto-Annotation Evaluation
 
 ```{r}
-auto_plot_dir <- '~/Documents/USC/USC_docs/ml/surgical-training-project/data/auto-label/plots'
-figures_dir <- '~/Documents/USC/USC_docs/ml/surgical-training-project/data/auto-label/figures/'
-save_location_results <- '~/Documents/USC/USC_docs/ml/surgical-training-project/data/auto-label/model_validation_data/'
+save_location_results <- '~/Documents/USC/USC_docs/ml/surgical-training-project/data/auto-label/20210205/'
+figures_dir <- file.path(save_location_results, 'figures')
+auto_plot_dir <- file.path(save_location_results, 'plots')
 ```
 
 This document serves to generate a report to determine metrics after our auto-annotator model has been run. It generates precision vs. recall curves and calculates a mean average precision score (mAP) on different subsets of the data
@@ -336,6 +336,8 @@ ggsave(maps_tools_cleaned, filename = file.path(figures_dir, 'maps_by_tool.pdf')
 video_test_results <- NULL
 video_test_maps <- NULL
 
+specific_tool <- 'cottonoid'
+
 for (ds in names(ds_list)) {
   videos_in_set <- ds_list[[ds]] %>% 
     mutate(vid=stringr::str_extract(string=frame, pattern='S[0-9]+T[0-9]+[A-Z]?')) %$%
@@ -343,10 +345,11 @@ for (ds in names(ds_list)) {
   
   for (vid in videos_in_set) {
     total_positives <- gt_results %>%
-      filter(class != '', stringr::str_extract(string=file, pattern='S[0-9]+T[0-9]+[A-Z]?') == vid) %>%
+      filter(class == specific_tool, stringr::str_extract(string=file, pattern='S[0-9]+T[0-9]+[A-Z]?') == vid) %>%
       nrow()
     
     m_v_results <- ds_list[[ds]] %>%
+      filter(class==specific_tool) %>%
       filter(stringr::str_extract(string=frame, pattern='S[0-9]+T[0-9]+[A-Z]?') == vid) %>%
       dplyr::rename(TP=tp, FP=fp) %>%
       prep_for_precision_recall_curve(., total_positives = total_positives)
@@ -368,6 +371,21 @@ ggplot(video_test_results, aes(recall, precision, color=model)) +
   facet_wrap(~vid) +
   scale_x_continuous(limits=c(0,1)) +
   scale_y_continuous(limits=c(0,1))
+```
+
+```{r eval=FALSE}
+test_eval_stages <- data.frame(
+  date=c('2020-09-14', '2021-02-05'),
+  cottonoid=c(0.3308, 0.5208),
+  string=c(0.0416, 0.4975),
+  suction=c(0.8276, 0.9112),
+  grasper=c(0.0829, 0.7685),
+  muscle=c(0.0604, 0.2512)
+) %>% gather(tool, value, -date)
+
+ggplot(test_eval_stages, aes(date, value, group=tool, color=tool)) +
+  geom_line() +
+  xlab('Dataset version') + ylab('mAP')
 ```
 
 ## Evaluation on 30 fps data
