@@ -12,8 +12,12 @@ knitr::opts_chunk$set(echo = FALSE, warning = F, message = F)
 ```{r child =  'apm_generation.Rmd'}
 ```
 
+```{r}
+# Table of cohort demographics
+```
+
 ```{r include=F}
-require(Metrics)
+library(Metrics)
 ```
 
 ## Looking at potential batch effects

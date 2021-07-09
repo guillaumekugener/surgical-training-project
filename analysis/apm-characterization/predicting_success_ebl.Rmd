@@ -9,6 +9,19 @@ output: html_document
 knitr::opts_chunk$set(echo = FALSE)
 ```
 
+```{r}
+require(tidyverse)
+require(magrittr)
+require(ggrepel)
+require(reshape2)
+require(DT)
+library(caret)
+library(glmnet)
+library(ggpubr)
+library(gridExtra)
+
+```
+
 # APMs to Predict Success vs. Failure
 
 The purpose of this analysis is to see how well we can predict success vs. failure and EBL using the APMs we have developed. We are also then interested in seeing which APMs our model weighs the most.
@@ -16,34 +29,159 @@ The purpose of this analysis is to see how well we can predict success vs. failu
 For this analysis, we will use trials 40X and 31X for testing and the remaining for training. We will use five fold cross validation when performing our training
 
 ```{r}
-plot_dir <- '~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/apm-characterization/20210205/plots'
-data_dir <- plot_dir %>% gsub('plots', 'data', .)
+date_to_use <- gsub('\\-', '', Sys.Date())
+
+output_dir <- file.path('~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/apm-characterization/', date_to_use)
+
+dir.create(output_dir)
+plot_dir <- file.path(output_dir, 'plots')
+data_dir <- file.path(output_dir, 'data')
+
+dir.create(plot_dir)
+dir.create(data_dir)
 ```
+
+```{r}
+# Doing the prediction just from the outcomes data saved in the tsv
+prediction_test_set <- c('S310T1', 'S314T1', 'S315T2', 'S315T1', 'S316T1', 'S316T2', 'S317T1', 'S317T2', 'S318T1', 'S318T2', 'S319T1', 'S319T2',  'S401T1', 'S401T2', 'S403T1', 'S403T2', 'S405T1', 'S405T2', 'S407T1', 'S407T2')
+training_set <- c('S102T1', 'S102T2', 'S103T1', 'S103T2', 'S104T1', 'S104T2', 'S106T1', 'S106T2', 'S107T1', 'S107T2', 'S108T1', 'S108T2', 'S109T1', 'S109T2', 'S110T1', 'S110T2', 'S111T1', 'S111T2', 'S112T1', 'S112T2', 'S113T1', 'S113T2', 'S114T1', 'S114T2', 'S115T1', 'S115T2', 'S117T1', 'S117T2', 'S118T1', 'S118T2', 'S119T1', 'S119T2', 'S201T1', 'S201T2', 'S202T1', 'S202T2', 'S203T1', 'S203T2', 'S204T1', 'S204T2', 'S205T1', 'S205T2', 'S206T1', 'S206T2', 'S207T1', 'S207T2', 'S301T1', 'S301T2', 'S302T1', 'S302T2', 'S303T1', 'S303T2', 'S304T1', 'S304T2', 'S305T1', 'S305T2', 'S306T1', 'S306T2', 'S308T1', 'S308T2', 'S309T1', 'S309T2', 'S314T2', 'S320T1', 'S502T1', 'S502T2', 'S504T1', 'S504T2', 'S505T1', 'S505T2', 'S506T1', 'S507T1', 'S507T2', 'S601T1', 'S601T2', 'S602T1', 'S602T2', 'S603T1', 'S603T2', 'S604T1', 'S604T2', 'S605T1', 'S605T2', 'S606T1', 'S606T2', 'S607T1', 'S607T2', 'S608T1', 'S608T2', 'S609T1', 'S609T2', 'S610T1', 'S610T2', 'S611T1', 'S611T2', 'S612T1', 'S612T2', 'S613T1', 'S613T2', 'S614T1', 'S614T2', 'S615T1', 'S615T2', 'S616T1', 'S616T2', 'S807T1', 'S807T2', 'S808T1', 'S808T2', 'S809T1', 'S809T2', 'S810T1', 'S810T2', 'S811T1', 'S811T2', 'S813T1', 'S813T2', 'S814T1', 'S814T2', 'S816T1', 'S816T2', 'S817T1', 'S817T2')
+
+outcomes <- read_tsv('~/Documents/USC/USC_docs/ml/surgical-training-project/data/carotid_outcomes/complete_data_set.tsv')
+
+training_successes <- outcomes %>% filter(`Trial 1 Success` == 0, `Trial 2 Success` == 1) %$% SurveyID
+pros <- outcomes %>% filter(`Trial 1 Success` == 1, `Trial 2 Success` == 1) %$% SurveyID
+
+outcomes_relevant <- outcomes %>% 
+  dplyr::select(
+    SurveyID,
+    Group, endolast12mo, cadaverlast12,
+    `Trial 1 TTH`, `Trial 2 TTH`, `Trial 1 Success`, `Trial 2 Success`, 
+    `Trial 1 EBL`=`trial 1 ebl`, `Trial 2 EBL`=`trial 2 ebl`) %>%
+  gather(variable, value, -endolast12mo, -cadaverlast12, -Group, -SurveyID) %>%
+  mutate(trial=stringr::str_extract(pattern='Trial [0-9]', string=variable)) %>%
+  mutate(variable_name=gsub('.* ', '', variable)) %>%
+  mutate(trial_id=paste0('S', SurveyID, 'T', stringr::str_extract(pattern='[0-9]', string=trial))) %>%
+  dcast(trial_id + Group + endolast12mo + cadaverlast12 ~ variable_name, value.var='value')
+
+train.data.outcomes <- outcomes_relevant %>%
+  filter(trial_id %in% training_set)
+test.data.outcomes <- outcomes_relevant %>%
+  filter(trial_id %in% prediction_test_set)
+
+# Build baseline lm EBL from total frames
+lm.fit <- train(
+  EBL ~ TTH, data = train.data.outcomes, method = "glm",
+  trControl = trainControl("cv", number = 10)
+)
+
+# Make predictions
+predictions <- lm.fit %>% predict(test.data.outcomes)
+outcomes_predictions_ebl <- rbind(data.frame(
+  pred=predictions, 
+  EBL=test.data.outcomes$EBL, 
+  trial_id=test.data.outcomes$trial_id, 
+  model='lm'))
+
+# Model prediction performance
+outcomes_accuracies <- rbind(data.frame(
+  model = 'lm',
+  RMSE = outcomes_predictions_ebl %>% filter(trial_id %in% prediction_test_set) %$% RMSE(pred, EBL),
+  Rsquare = outcomes_predictions_ebl %>% filter(trial_id %in% prediction_test_set) %$% R2(pred, EBL)
+))
+
+lm_eqn <- function(df){
+    m <- lm(y ~ x, df);
+    eq <- substitute(italic(y) == a + b %.% italic(x)*","~~italic(r)^2~"="~r2, 
+         list(a = format(unname(coef(m)[1]), digits = 2),
+              b = format(unname(coef(m)[2]), digits = 2),
+             r2 = format(summary(m)$r.squared, digits = 3)))
+    as.character(as.expression(eq));
+}
+
+lm.outcomes <- ggplot(outcomes_predictions_ebl, aes(EBL, pred)) +
+  geom_point() +
+  geom_text(data = outcomes_accuracies %>% mutate(x = 2^5, y = 2^10, tg=NA), aes(x=x, y=y, label=paste0('RMSE: ', round(RMSE, 3), '; R2: ', round(Rsquare, 3)), hjust=0, vjust=0.5)) +
+  geom_smooth(method='lm') +
+  xlab('Observed Blood Loss') + ylab('Predicted Blood Loss') + 
+  ggtitle('LM Predict Blood Loss from TTH') +
+  theme_bw() + 
+  theme(
+    legend.position='top',
+    legend.justification = 'left',
+    text = element_text(size=16),
+    axis.text = element_text(size=16),
+    axis.title = element_text(size=16)
+  )
+
+outcomes_predictions_ebl %>%
+  write.table(., file = file.path(data_dir, 'lm_bl_tth.csv'), row.names=F, quote=F, sep=',')
+ggsave(lm.outcomes, filename = file.path(plot_dir, 'lm_blood_loss_tth.pdf'), width = 6, height = 4, units='in')
+```
+
+
 
 ```{r child=apm_generation.Rmd}
 ```
 
 ```{r}
-library(caret)
-library(glmnet)
-library(ggpubr)
+
 ```
 
 ```{r}
+n_samples <- 4
 # For test set, we are going to randomly sample 6 trials in each of the follow: trainee-success, trainee-failure, attending-success, attending-failure
 set.seed(123)
-test_ts <- apms_dataframe %>% filter(Success==1, Group=='Trainee') %$% trial_id %>% sample(6)
+test_ts <- apms_dataframe %>% filter(Success==1, Group=='Trainee') %$% trial_id %>% 
+  sample(min(length(.)-2, n_samples))
 set.seed(123)
-test_tf <- apms_dataframe %>% filter(Success==0, Group=='Trainee') %$% trial_id %>% sample(6)
+test_tf <- apms_dataframe %>% filter(Success==0, Group=='Trainee') %$% trial_id %>% 
+  sample(min(length(.)-2, n_samples))
 set.seed(123)
-test_as <- apms_dataframe %>% filter(Success==1, Group=='Attending') %$% trial_id %>% sample(6)
+test_as <- apms_dataframe %>% filter(Success==1, Group=='Attending') %$% trial_id %>% 
+  sample(min(length(.)-2, n_samples))
 set.seed(123)
-test_af <- apms_dataframe %>% filter(Success==0, Group=='Attending') %$% trial_id %>% sample(6)
+test_af <- apms_dataframe %>% filter(Success==0, Group=='Attending') %$% trial_id %>% 
+  sample(min(length(.)-2, n_samples))
 
 
 prediction_test_set <- c(test_ts, test_tf, test_as, test_af)
 # prediction_test_set <- apms_dataframe$trial_id %>% .[grep('^S2', .)] # There is only 1/14 failures in this set...
 training_set <- setdiff(apms_dataframe$trial_id, prediction_test_set)
+
+length(training_set)
+length(prediction_test_set)
+```
+
+```{r}
+# APMs manuscript test train set
+prediction_test_set <- c("S103T2",
+"S107T1",
+"S108T1",
+"S112T1",
+"S117T1",
+"S117T2",
+"S119T2",
+"S204T1",
+"S301T1",
+"S309T2",
+"S315T1",
+"S315T2",
+"S316T1",
+"S504T1",
+"S603T1",
+"S604T1",
+"S609T1",
+"S612T2",
+"S807T2",
+"S808T1",
+"S810T1",
+"S811T2",
+"S813T2",
+"S814T1")
+training_set <- setdiff(apms_dataframe$trial_id, prediction_test_set)
+
+length(training_set)
+length(prediction_test_set)
 ```
 
 ```{r}
@@ -467,6 +605,7 @@ coef_df %<>%
     grepl('distance', variable) ~ 'Distance',
     grepl('speed', variable) ~ 'Speed',
     grepl('area', variable) ~ 'Area',
+    grepl('(overlap)|(got_to)', variable) ~ 'Actions',
     TRUE ~ 'Misc'
   )) %>% filter(variable != '(Intercept)')
 ```
@@ -483,9 +622,10 @@ ebl_pred_from_annotated_df %>%
 g.ebl.pred <- ggplot(ebl_pred_from_annotated_df,
                   aes(EBL, pred, color=tg)) +
   geom_point(aes(size=tg)) +
+  geom_text(data = ebl_accuracies %>% mutate(x = 5, y = 10, tg=NA), aes(x=x, y=y, label=paste0('RMSE: ', round(RMSE, 3))), hjust=0, vjust=0.5) +
   geom_abline(slope=1, linetype=2) +
   xlab('Actual log2(EBL)') + ylab('Predicted log2(EBL)') + 
-  stat_cor(method = "pearson") +
+  # stat_cor(method = "pearson") +
   facet_wrap(~model) +
   scale_size_manual(values=c('test'=2, 'train'=0.5)) +
   theme_bw() + 
@@ -530,6 +670,236 @@ g1 <- ggplot(ebl_coef_plot_data,
 g1
 
 ggsave(g1, filename = file.path(plot_dir, 'coefficients_ebl_from_1fps_annotated.pdf'), width = 10, height = 12, units='in')
+```
+
+```{r}
+# Clean up variable names
+variable_clean_names = c("total"="Trial Length",
+  "GroupTrainee"="Training Level (Trainee vs. Attending)",
+  "endolast12mo"="Number of endoscopic cases in the last 12 months",
+  "cadaverlast12"="Number of cadaver simulations in the last 12 months",
+  "resolution1920x1080"="Trial Video Resolution", 
+  "frames_with_cottonoid"="Frames Cottonoid Present",
+  "frames_with_grasper"="Frames Grasper Present",
+  "frames_with_muscle"="Frames Muscle Present", 
+  "frames_with_string"="Frames String Present",
+  "frames_with_suction"="Frames Suction Present",
+  "frames_with_0_tools_in_view"="Frames with no tools in view", 
+  "frames_with_1_tools_in_view"="Frames with 1 tool in view", 
+  "frames_with_2_tools_in_view"="Frames with 2 tools in view",
+  "frames_with_3_tools_in_view"="Frames with 3 tools in view", 
+  "frames_with_4_tools_in_view"="Frames with 4 tools in view",
+  "first_frame_appear_cottonoid"="First frame that cottonoid appears",
+  "first_frame_appear_grasper"="First frame that grasper appears", 
+  "first_frame_appear_muscle"="First frame that muscle appears",
+  "first_frame_appear_string"="First frame that string appears",
+  "first_frame_appear_suction"="First frame that suction appears", 
+  "n_in_n_outs_cottonoid"="Number of cottonoid disappearances",
+  "n_in_n_outs_grasper"="Number of grasper disappearances",
+  "n_in_n_outs_muscle"="Number of muscle disappearances", 
+  "n_in_n_outs_string"="Number of string disappearances",
+  "n_in_n_outs_suction"="Number of suction disappearances",
+  "total_in_n_outs"="Total number of tool disappearances", 
+  "area_covered_cottonoid"="Total area covered by cottonoid",
+  "area_covered_grasper"="Total area covered by grasper",
+  "area_covered_muscle"="Total area covered by muscle", 
+  "area_covered_string"="Total area covered by string",
+  "area_covered_suction"="Total area covered by suction",
+  "sd_x1_cottonoid"="Standard deviation in cottonoid left BB coordinate", 
+  "sd_x1_grasper"="Standard deviation in grasper left BB coordinate",
+  "sd_x1_muscle"="Standard deviation in muscle left BB coordinate",
+  "sd_x1_string"="Standard deviation in string left BB coordinate",
+  "sd_x1_suction"="Standard deviation in suction left BB coordinate", 
+  "sd_x2_cottonoid"="Standard deviation in cottonoid right BB coordinate",
+  "sd_x2_grasper"="Standard deviation in grasper right BB coordinate",
+  "sd_x2_muscle"="Standard deviation in muscle right BB coordinate",
+  "sd_x2_string"="Standard deviation in string right BB coordinate", 
+  "sd_x2_suction"="Standard deviation in suction right BB coordinate",
+  "sd_y1_cottonoid"="Standard deviation in cottonoid top BB coordinate",
+  "sd_y1_grasper"="Standard deviation in grasper top top BB coordinate",
+  "sd_y1_muscle"="Standard deviation in muscle top BB coordinate", 
+  "sd_y1_string"="Standard deviation in string top BB coordinate",
+  "sd_y1_suction"="Standard deviation in suction top BB coordinate",
+  "sd_y2_cottonoid"="Standard deviation in cottonoid bottom BB coordinate",
+  "sd_y2_grasper"="Standard deviation in grasper bottom BB coordinate", 
+  "sd_y2_muscle"="Standard deviation in muscle bottom BB coordinate",
+  "sd_y2_string"="Standard deviation in string bottom BB coordinate",
+  "sd_y2_suction"="Standard deviation in suction bottom BB coordinate",
+  "sd_z_x1_cottonoid"="Standard deviation in cottonoid normalized left BB coordinate", 
+  "sd_z_x1_grasper"="Standard deviation in grasper normalized left BB coordinate",
+  "sd_z_x1_muscle"="Standard deviation in muscle normalized left BB coordinate",
+  "sd_z_x1_string"="Standard deviation in string normalized left BB coordinate",
+  "sd_z_x1_suction"="Standard deviation in suction normalized left BB coordinate", 
+  "sd_z_x2_cottonoid"="Standard deviation in cottonoid normalized right BB coordinate",
+  "sd_z_x2_grasper"="Standard deviation in grasper normalized right BB coordinate",
+  "sd_z_x2_muscle"="Standard deviation in muscle normalized right BB coordinate",
+  "sd_z_x2_string"="Standard deviation in string normalized right BB coordinate", 
+  "sd_z_x2_suction"="Standard deviation in suction normalized right BB coordinate",
+  "sd_z_y1_cottonoid"="Standard deviation in cottonoid normalized top left BB coordinate",
+  "sd_z_y1_grasper"="Standard deviation in grasper normalized top BB coordinate",
+  "sd_z_y1_muscle"="Standard deviation in muscle normalized top BB coordinate", 
+  "sd_z_y1_string"="Standard deviation in string normalized top BB coordinate",
+  "sd_z_y1_suction"="Standard deviation in suction normalized top BB coordinate",
+  "sd_z_y2_cottonoid"="Standard deviation in cottonoid normalized bottom BB coordinate",
+  "sd_z_y2_grasper"="Standard deviation in grasper normalized bottom BB coordinate", 
+  "sd_z_y2_muscle"="Standard deviation in muscle normalized bottom BB coordinate",
+  "sd_z_y2_string"="Standard deviation in string normalized bottom BB coordinate",
+  "sd_z_y2_suction"="Standard deviation in suction normalized bottom BB coordinate",
+  "distance_covered_cottonoid"="Distance covered by cottonoid", 
+  "distance_covered_grasper"="Distance covered by grasper",
+  "distance_covered_muscle"="Distance covered by muscle",
+  "distance_covered_string"="Distance covered by string", 
+  "distance_covered_suction"="Distance covered by suction",
+  "tool_speed_cottonoid"="Cottonoid speed",
+  "tool_speed_grasper"="Grasper speed", 
+  "tool_speed_muscle"="Muscle speed",
+  "tool_speed_string"="String speed",
+  "tool_speed_suction"="Suction speed", 
+  "overlap_sc"="Number of frames suction and cottonoid overlap",
+  "got_to_sc_step"="First frame suction and cottonoid overlap",
+  "overlap_gm"="Number of frames grasper and muscle overlap",
+  "got_to_gm_step"="First frame grasper and muscle overlap"
+)
+
+ebl_coef_plot_data %>%
+  arrange(v_type, variable, source) %>%
+  mutate(value=ifelse(value < 0.001, format(value, digits=3), round(value, 3))) %>%
+  dcast(v_type + variable ~ model, value.var = 'value') %>%
+  mutate(variable=variable_clean_names[variable]) %>%
+  write.table(., file = file.path(data_dir, 'clean_model_variables.tsv'), sep = '\t', quote=F, row.names = F)
+
+for_plot_variable_names <- variable_clean_names %>%
+  gsub('Standard deviation in ', 'In ', .) %>%
+  gsub(' BB coordinate', '', .) %>%
+  gsub('normalized ', '', .) %>%
+  gsub('(Total area|Distance|) covered by ', '', .) %>%
+  gsub(' speed', '', .) %>%
+  gsub('^(First frame that )|( appears$)', '', .) %>%
+  gsub('(Frames( with)? )|( disappearances)', '', .) %>%
+  gsub('Number of ', '', .) %>%
+  gsub(' and', '\nand', .) %>%
+  gsub(' in the last', '\nin the last', .) %>%
+  gsub(' \\(Trainee', '\n\\(Trainee', .) %>%
+  gsub('Total number of tool', 'All Tools', .) %>%
+  tools::toTitleCase(.)
+
+# Make a clean figure
+plots_all_variable_types <- list()
+for (v_t in unique(ebl_coef_plot_data$v_type)) {
+  plot_data_variables <- ebl_coef_plot_data %>% 
+    filter(v_type==v_t) %>%
+    mutate(variable=for_plot_variable_names[variable]) %>%
+    mutate(variable=factor(variable, levels=rev(unique(for_plot_variable_names))))
+  
+  plot_data_variables %<>% mutate(model_clean_name=tools::toTitleCase(model))
+  
+  nbreaks_to_use = 4
+  if (v_t == 'First Frame') {
+    nbreaks_to_use = 3
+  }
+  
+  plots_all_variable_types[[v_t]] <- ggplot(plot_data_variables, 
+      aes(value, variable, fill=model_clean_name)
+    ) +
+    geom_bar(stat = 'identity', position = position_dodge()) +
+    scale_x_continuous(n.breaks = nbreaks_to_use) + 
+    facet_wrap(~v_type, scales = 'free') +
+    xlab('') + ylab('') +
+    theme_bw() +
+    theme(
+      axis.text.x = element_text(size=10),
+      legend.title = element_blank(),
+      legend.position = 'top',
+      # legend.justification = 'left',
+      legend.direction = 'horizontal',
+      plot.margin = margin(5, 15, 5, 15)
+    )
+}
+```
+
+```{r fig.height=11, fig.width=8}
+# final_plot_coeffs <- grid.arrange(grobs = plots_all_variable_types, 
+#   layout_matrix = rbind(c(1,1,1,10,10,10),
+#                         c(1,1,1,10,10,10),
+#                         # c(10,10,10,1,1,1),
+#                         c(2,2,3,3,4,4),
+#                         c(2,2,3,3,4,4),
+#                         c(5,5,8,8,9,9),
+#                         c(5,5,8,8,9,9),
+#                         c(6,6,6,7,7,7),
+#                         c(6,6,6,7,7,7),
+#                         c(6,6,6,7,7,7),
+#                         c(6,6,6,7,7,7)))
+
+# Use ggpubr once all the dimensions are set so we can easily inlcude labels
+first_row <- ggarrange(plots_all_variable_types$Misc, plots_all_variable_types$Actions, labels = c('A', 'B'), ncol = 2, common.legend = T, legend = "none")
+second_row <- ggarrange(plots_all_variable_types$Proportion, plots_all_variable_types$`Tool Disappearances`, plots_all_variable_types$`First Frame`, labels = c('C', 'D', 'E'), ncol = 3, common.legend = T, legend = "none")
+third_row <- ggarrange(plots_all_variable_types$Distance, plots_all_variable_types$Speed, plots_all_variable_types$Area, labels = c('F', 'G', 'H'), ncol = 3, common.legend = T, legend = "none")
+fourth_row <- ggarrange(plots_all_variable_types$`Coordinate variation`, plots_all_variable_types$`Coordinate variation (normalized)`, labels = c('I', 'J'), common.legend = T, legend = "none")
+
+final_plot_coeffs <- ggarrange(
+  first_row, second_row, third_row, fourth_row, 
+  heights = c(1,1,1,1.5), 
+  common.legend = T, nrow = 4, legend.grob = get_legend(plots_all_variable_types$Misc), legend = "top")
+
+final_plot_coeffs <- annotate_figure(final_plot_coeffs,
+  bottom = text_grob("Model Weights", size = 10)
+  # left = text_grob("Feature", rot = 90, size = 10)
+)
+
+ggsave(final_plot_coeffs, filename = file.path(plot_dir, 'coeffs_plot_clean.tiff'), units = 'in', height = 10, width = 8)
+```
+
+```{r}
+# Outcomes table
+outcomes_demographics <- outcomes %>%
+  mutate(trial_1_id=paste0('S', SurveyID, 'T1'), trial_2_id=paste0('S', SurveyID, 'T2')) %>%
+  filter((trial_1_id %in% c(prediction_test_set, training_set)) | 
+      (trial_2_id %in% c(prediction_test_set, training_set))) %>%
+  dplyr::select(SurveyID, Group, Specialty, Totyears, Attyears, Resyears, endolast12mo, cadaverlast12, priorreal, priorsim)
+
+overall_demographics_data <- rbind(
+  outcomes_demographics %>%
+    dplyr::summarise(
+      n_attendings=length(which(Group=='Attending')),
+      n_trainees=length(which(Group=='Trainee')),
+      n_neuro=length(which(Specialty=='Neurosurgery')),
+      n_oto=length(which(Specialty=='Otolaryngology')),
+      prior_real=sum(priorreal, na.rm = T), prior_sim=sum(priorsim, na.rm = T)
+    ) %>% gather(variable, value),
+  outcomes_demographics %>%
+    dplyr::summarise(
+      median_total_years=median(Totyears, na.rm = T),
+      median_endo=median(endolast12mo, na.rm = T), 
+      median_cadaverlast12=median(cadaverlast12, na.rm = T)
+    ) %>% gather(variable, value)
+) %>% mutate(Group='Overall')
+
+split_by_training_demographics_data <- rbind(
+  outcomes_demographics %>%
+    group_by(Group) %>%
+    dplyr::summarise(
+      n_attendings=length(which(Group=='Attending')),
+      n_trainees=length(which(Group=='Trainee')),
+      n_neuro=length(which(Specialty=='Neurosurgery')),
+      n_oto=length(which(Specialty=='Otolaryngology')),
+      prior_real=sum(priorreal, na.rm = T), prior_sim=sum(priorsim, na.rm = T)
+    ) %>% gather(variable, value, -Group),
+  outcomes_demographics %>%
+    group_by(Group) %>%
+    dplyr::summarise(
+      median_total_years=median(Totyears, na.rm = T),
+      median_endo=median(endolast12mo, na.rm = T), 
+      median_cadaverlast12=median(cadaverlast12, na.rm = T)
+    ) %>% gather(variable, value, -Group)
+)
+
+combined_dems_data <- rbind(overall_demographics_data, split_by_training_demographics_data) %>%
+  dcast(variable ~ Group, value.var='value') %>%
+  dplyr::select(variable, Overall, Attending, Trainee)
+
+combined_dems_data %>%
+  write.table(., file = file.path(data_dir, 'surgeon_demographics.csv'), sep=',', quote=F, row.names=F)
 ```
 
 ### From 30 FPS Detection Data
@@ -769,6 +1139,7 @@ detection_coef_df %<>%
     grepl('distance', variable) ~ 'Distance',
     grepl('speed', variable) ~ 'Speed',
     grepl('area', variable) ~ 'Area',
+    grepl('overlap', variable) ~ 'Actions',
     TRUE ~ 'Misc'
   )) %>% filter(variable != '(Intercept)')
 ```
