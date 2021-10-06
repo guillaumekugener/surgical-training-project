@@ -15,11 +15,16 @@ require(DT)
 ```
 
 ```{r}
-main_dir <- '~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/apm-characterization/20211006/'
-plot_dir <- file.path(main_dr, 'plots')
-data_dir <- plot_dir %>% gsub('plots', 'data', .)
+gt_root_file <- '~/Documents/USC/USC_docs/ml/datasets/fps-1-uncropped/ImageSets/Main/retinanet_surgical_1fps_complete.csv'
 
-dir.create(main_dir)
+date_to_use <- gsub('\\-', '', Sys.Date())
+
+output_dir <- file.path('~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/apm-characterization/', date_to_use)
+
+dir.create(output_dir)
+plot_dir <- file.path(output_dir, 'plots')
+data_dir <- file.path(output_dir, 'data')
+
 dir.create(plot_dir)
 dir.create(data_dir)
 ```
@@ -41,7 +46,7 @@ dg1280x720 <- dimensions_grouping %>% filter(gname=='1280x720') %$% trial_id
 
 ```{r include=FALSE}
 # Load ground truth 1 fps data
-gt_fps1 <- read_csv('~/Documents/USC/USC_docs/ml/datasets/fps-1-uncropped/ImageSets/Main/retinanet_surgical_1fps_complete.csv',
+gt_fps1 <- read_csv(gt_root_file,
   col_names = c('file', 'x1', 'y1', 'x2', 'y2', 'tool')) %>%
   mutate(short_file_name=gsub('.*/', '', file)) %>%
   mutate(trial_id=gsub('[a-z]?_.*', '', short_file_name)) %>%
