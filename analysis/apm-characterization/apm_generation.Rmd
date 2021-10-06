@@ -15,8 +15,13 @@ require(DT)
 ```
 
 ```{r}
-plot_dir <- '~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/apm-characterization/20210205/plots'
+main_dir <- '~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/apm-characterization/20211006/'
+plot_dir <- file.path(main_dr, 'plots')
 data_dir <- plot_dir %>% gsub('plots', 'data', .)
+
+dir.create(main_dir)
+dir.create(plot_dir)
+dir.create(data_dir)
 ```
 
 # Cohort Characterization with APMs

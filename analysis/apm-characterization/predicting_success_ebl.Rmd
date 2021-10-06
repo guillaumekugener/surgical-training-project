@@ -16,7 +16,7 @@ The purpose of this analysis is to see how well we can predict success vs. failu
 For this analysis, we will use trials 40X and 31X for testing and the remaining for training. We will use five fold cross validation when performing our training
 
 ```{r}
-plot_dir <- '~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/apm-characterization/20210205/plots'
+# plot_dir <- '~/Documents/USC/USC_docs/ml/surgical-training-project/analysis/apm-characterization/20210205/plots'
 data_dir <- plot_dir %>% gsub('plots', 'data', .)
 ```
 
@@ -530,6 +530,17 @@ g1 <- ggplot(ebl_coef_plot_data,
 g1
 
 ggsave(g1, filename = file.path(plot_dir, 'coefficients_ebl_from_1fps_annotated.pdf'), width = 10, height = 12, units='in')
+```
+
+```{r}
+# Save the test set
+prediction_test_set %>%
+  write.table(., file = file.path(data_dir, 'test_trials.tsv'), sep='\t', quote=F, row.names=F, col.names=F)
+
+length(prediction_test_set)
+
+training_set %>%
+  write.table(., file = file.path(data_dir, 'training_trials.tsv'), sep='\t', quote=F, row.names=F, col.names=F)
 ```
 
 ### From 30 FPS Detection Data
